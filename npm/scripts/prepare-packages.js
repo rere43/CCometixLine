@@ -2,7 +2,20 @@
 const fs = require('fs');
 const path = require('path');
 
-const version = process.env.GITHUB_REF?.replace('refs/tags/v', '') || process.argv[2];
+function normalizeNpmVersion(raw) {
+  // npm requires valid semver (MAJOR.MINOR.PATCH). This repo historically uses
+  // 4-part tags like `v1.0.9.3`, which is invalid semver for npm. Normalize:
+  //   1.0.9.3 -> 1.0.9-3
+  const fourPart = raw.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (fourPart) {
+    const [, major, minor, patch, rev] = fourPart;
+    return `${major}.${minor}.${patch}-${rev}`;
+  }
+  return raw;
+}
+
+const rawVersion = process.env.GITHUB_REF?.replace('refs/tags/v', '') || process.argv[2];
+const version = rawVersion ? normalizeNpmVersion(rawVersion) : rawVersion;
 if (!version) {
   console.error('Error: Version not provided');
   console.error('Usage: GITHUB_REF=refs/tags/v1.0.0 node prepare-packages.js');
@@ -10,6 +23,9 @@ if (!version) {
   process.exit(1);
 }
 
+if (rawVersion && rawVersion !== version) {
+  console.log(`ℹ️ Normalized npm version: ${rawVersion} -> ${version}`);
+}
 console.log(`🚀 Preparing packages for version ${version}`);
 
 // Define platform structures
