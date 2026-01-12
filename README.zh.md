@@ -7,6 +7,45 @@
 ![Language:Rust](https://img.shields.io/static/v1?label=Language&message=Rust&color=orange&style=flat-square)
 ![License:MIT](https://img.shields.io/static/v1?label=License&message=MIT&color=blue&style=flat-square)
 
+## 相比官方版本的增强功能
+
+本项目在官方 CCometixLine 基础上增加了以下功能：
+
+### 🏷️ 模型别名管理
+- **自定义模型显示名称**：为任意模型 ID 设置友好的显示名称
+- **上下文窗口限制**：为每个模型配置独立的上下文限制
+- **TUI 编辑器**：通过主菜单进入（运行 `ccline` → "Model Aliases"）
+- **配置文件**：`~/.claude/ccline/models.toml`
+
+### 📊 CLI Proxy API 配额显示
+- **实时配额监控**：显示 Opus、Gemini 3 Pro、Gemini 3 Flash 的剩余配额
+- **多账号聚合**：自动聚合所有认证账号的配额信息
+- **可配置选项**：
+  - Host：API 服务器地址
+  - Key：管理密钥
+  - 模型别名和颜色自定义
+  - 分隔符样式
+- **失败提示**：获取失败时显示灰色提示和缓存数据
+
+### 配置入口
+
+```bash
+# 进入主菜单（无参数运行）
+ccline
+
+# 或直接进入配置界面
+ccline --config    # 或 ccline -c
+```
+
+**通过主菜单访问：**
+1. 运行 `ccline`（无参数）进入主菜单
+2. 选择 "Model Aliases" 进入模型别名编辑器
+3. 选择 "Configuration Mode" 进入 TUI 配置界面
+
+**在 TUI 配置界面中：**
+- 选择 `CliProxyApiQuota` 段落，在 Settings → Options 进入选项设置（回车）
+- 配置 Host、Key、模型别名、颜色等
+
 ## 截图
 
 ![CCometixLine](assets/img1.png)
@@ -37,40 +76,21 @@
 
 ## 安装
 
-### 快速安装（推荐）
-
-通过 npm 安装（适用于所有平台）：
+### 通过 npm 安装（推荐）
 
 ```bash
-# 全局安装
-npm install -g @cometix/ccline
-
-# 或使用 yarn
-yarn global add @cometix/ccline
-
-# 或使用 pnpm
-pnpm add -g @cometix/ccline
+npm install -g @kei233/ccline
 ```
 
-使用镜像源加速下载：
-```bash
-npm install -g @cometix/ccline --registry https://registry.npmmirror.com
-```
+### Claude Code 配置（必需）
 
-安装后：
-- ✅ 全局命令 `ccline` 可在任何地方使用
-- ⚙️ 按照下方提示进行配置以集成到 Claude Code
-- 🎨 运行 `ccline -c` 打开配置面板进行主题选择
-
-### Claude Code 配置
-
-添加到 Claude Code `settings.json`：
+无论使用哪种安装方式，都需要配置 Claude Code 的 `settings.json` 来启用状态栏：
 
 **Linux/macOS:**
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "~/.claude/ccline/ccline",
     "padding": 0
   }
@@ -81,29 +101,28 @@ npm install -g @cometix/ccline --registry https://registry.npmmirror.com
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "%USERPROFILE%\\.claude\\ccline\\ccline.exe",
     "padding": 0
   }
 }
 ```
 
-**后备方案 (npm 安装):**
+**简化配置（如果 ccline 已在 PATH 中）：**
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "ccline",
     "padding": 0
   }
 }
 ```
-*如果 npm 全局安装已在 PATH 中可用，则使用此配置*
 
 ### 更新
 
 ```bash
-npm update -g @cometix/ccline
+npm update -g @kei233/ccline
 ```
 
 <details>

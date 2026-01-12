@@ -1,5 +1,5 @@
 {
-  "name": "@cometix/ccline-linux-x64",
+  "name": "@kei233/ccline-linux-x64",
   "version": "0.0.0",
   "description": "Linux x64 binary for CCometixLine",
   "files": ["ccline"],

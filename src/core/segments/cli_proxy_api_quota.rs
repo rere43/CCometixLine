@@ -143,6 +143,22 @@ impl CliProxyApiQuotaSegment {
         Self
     }
 
+    fn antigravity_user_agent() -> String {
+        let version = env!("CARGO_PKG_VERSION");
+        let os = match std::env::consts::OS {
+            "macos" => "darwin",
+            other => other,
+        };
+        let arch = match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            "x86" | "i686" => "386",
+            other => other,
+        };
+
+        format!("antigravity/{} {}/{}", version, os, arch)
+    }
+
     fn normalize_model_text(text: &str) -> String {
         let mut s = text.trim().to_lowercase();
         for suffix in ["-preview", " preview"] {
@@ -318,17 +334,15 @@ impl CliProxyApiQuotaSegment {
         method: &str,
         url: &str,
         data: &str,
-        extra_headers: Option<HashMap<&str, &str>>,
+        extra_headers: Option<HashMap<String, String>>,
     ) -> Option<ApiCallResponse> {
         let api_url = format!("{}/v0/management/api-call", host);
 
-        let mut headers = HashMap::new();
-        headers.insert("Authorization", "Bearer $TOKEN$");
-        headers.insert("Content-Type", "application/json");
+        let mut headers: HashMap<String, String> = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer $TOKEN$".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
         if let Some(extra) = extra_headers {
-            for (k, v) in extra {
-                headers.insert(k, v);
-            }
+            headers.extend(extra);
         }
 
         let payload = serde_json::json!({
@@ -357,7 +371,7 @@ impl CliProxyApiQuotaSegment {
 
     fn get_antigravity_quota(&self, host: &str, key: &str, auth_index: &str) -> Vec<ModelQuota> {
         let mut extra_headers = HashMap::new();
-        extra_headers.insert("User-Agent", "antigravity/1.11.5 windows/amd64");
+        extra_headers.insert("User-Agent".to_string(), Self::antigravity_user_agent());
 
         let result = self.api_call(
             host,

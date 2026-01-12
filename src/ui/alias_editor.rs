@@ -103,7 +103,10 @@ impl AliasEditorApp {
                             self.editing_index = None;
                         }
                         KeyCode::Enter => {
-                            if let Some(input) = self.name_input.get_input() {
+                            // For context limit (optional), allow empty input
+                            if self.input_mode == InputMode::EditingContext {
+                                self.handle_input_submission(self.name_input.input.clone());
+                            } else if let Some(input) = self.name_input.get_input() {
                                 self.handle_input_submission(input);
                             }
                         }
@@ -430,12 +433,15 @@ impl AliasEditorApp {
     fn ui(&mut self, f: &mut Frame) {
         let size = f.area();
 
+        // Calculate help area height: 3 for help only, 5 if status message present
+        let help_height = if self.status_message.is_some() { 5 } else { 3 };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Title
-                Constraint::Min(5),    // List
-                Constraint::Length(3), // Help/Status
+                Constraint::Length(3),      // Title
+                Constraint::Min(5),         // List
+                Constraint::Length(help_height), // Help/Status
             ])
             .split(size);
 
@@ -471,16 +477,19 @@ impl AliasEditorApp {
 
         f.render_stateful_widget(list, chunks[1], &mut self.state);
 
-        // Status / Help
-        let status_text = if let Some(msg) = &self.status_message {
-            msg.clone()
-        } else {
-            "[A] Add  [E/Enter] Edit  [D/Del] Delete  [S] Save  [Esc/Q] Quit".to_string()
-        };
+        // Help + Status
+        let help_text = "[A] Add  [E/Enter] Edit  [D/Del] Delete  [S] Save  [Esc/Q] Quit";
+        let mut lines = vec![
+            Line::from(Span::styled(help_text, Style::default().fg(Color::Gray)))
+        ];
 
-        let status = Paragraph::new(status_text)
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(if self.status_message.is_some() { Color::Yellow } else { Color::Gray }));
+        if let Some(msg) = &self.status_message {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Yellow))));
+        }
+
+        let status = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(status, chunks[2]);
 
         // Popup

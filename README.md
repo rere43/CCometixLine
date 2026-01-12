@@ -7,6 +7,45 @@ A high-performance Claude Code statusline tool written in Rust with Git integrat
 ![Language:Rust](https://img.shields.io/static/v1?label=Language&message=Rust&color=orange&style=flat-square)
 ![License:MIT](https://img.shields.io/static/v1?label=License&message=MIT&color=blue&style=flat-square)
 
+## Enhanced Features (Compared to Official Version)
+
+This project adds the following features on top of the official CCometixLine:
+
+### 🏷️ Model Alias Management
+- **Custom Display Names**: Set friendly display names for any model ID
+- **Context Window Limits**: Configure independent context limits for each model
+- **TUI Editor**: Open from main menu (`ccline` → "Model Aliases")
+- **Configuration File**: `~/.claude/ccline/models.toml`
+
+### 📊 CLI Proxy API Quota Display
+- **Real-time Quota Monitoring**: Display remaining quota for Opus, Gemini 3 Pro, Gemini 3 Flash
+- **Multi-account Aggregation**: Automatically aggregate quota info from all authenticated accounts
+- **Configurable Options**:
+  - Host: API server address
+  - Key: Management key
+  - Model aliases and color customization
+  - Separator style
+- **Failure Indication**: Shows gray warning and cached data when fetch fails
+
+### Configuration Entry Points
+
+```bash
+# Enter main menu (run without arguments)
+ccline
+
+# Or directly enter configuration interface
+ccline --config    # or ccline -c
+```
+
+**Access via Main Menu:**
+1. Run `ccline` (no arguments) to enter main menu
+2. Select "Model Aliases" to enter model alias editor
+3. Select "Configuration Mode" to enter TUI configuration interface
+
+**In TUI Configuration Interface:**
+- Select `CliProxyApiQuota` segment, then go to Settings → Options (press Enter)
+- Configure Host, Key, model aliases, colors, etc.
+
 ## Screenshots
 
 ![CCometixLine](assets/img1.png)
@@ -37,40 +76,21 @@ The statusline shows: Model | Directory | Git Branch Status | Context Window Inf
 
 ## Installation
 
-### Quick Install (Recommended)
-
-Install via npm (works on all platforms):
+### Install via npm (Recommended)
 
 ```bash
-# Install globally
-npm install -g @cometix/ccline
-
-# Or using yarn
-yarn global add @cometix/ccline
-
-# Or using pnpm
-pnpm add -g @cometix/ccline
+npm install -g @kei233/ccline
 ```
 
-Use npm mirror for faster download:
-```bash
-npm install -g @cometix/ccline --registry https://registry.npmmirror.com
-```
+### Claude Code Configuration (Required)
 
-After installation:
-- ✅ Global command `ccline` is available everywhere
-- ⚙️ Follow the configuration steps below to integrate with Claude Code
-- 🎨 Run `ccline -c` to open configuration panel for theme selection
-
-### Claude Code Configuration
-
-Add to your Claude Code `settings.json`:
+Regardless of installation method, you need to configure Claude Code's `settings.json` to enable the statusline:
 
 **Linux/macOS:**
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "~/.claude/ccline/ccline",
     "padding": 0
   }
@@ -81,29 +101,28 @@ Add to your Claude Code `settings.json`:
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "%USERPROFILE%\\.claude\\ccline\\ccline.exe",
     "padding": 0
   }
 }
 ```
 
-**Fallback (npm installation):**
+**Simplified (if ccline is in PATH):**
 ```json
 {
   "statusLine": {
-    "type": "command", 
+    "type": "command",
     "command": "ccline",
     "padding": 0
   }
 }
 ```
-*Use this if npm global installation is available in PATH*
 
 ### Update
 
 ```bash
-npm update -g @cometix/ccline
+npm update -g @kei233/ccline
 ```
 
 <details>
