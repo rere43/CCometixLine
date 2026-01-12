@@ -1,6 +1,7 @@
 use super::{Segment, SegmentData};
 use crate::config::{AnsiColor, InputData, SegmentId};
 use chrono::{DateTime, Utc};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -556,8 +557,8 @@ impl CliProxyApiQuotaSegment {
             .map(|cache| self.is_cache_valid(cache, cache_duration))
             .unwrap_or(false);
 
-        let quotas = if use_cached {
-            cached_data.unwrap().quotas
+        let (quotas, fetch_failed, using_stale_cache) = if use_cached {
+            (cached_data.unwrap().quotas, false, false)
         } else {
             let fetched = self.fetch_all_quotas(host, key, auth_type);
             if !fetched.is_empty() {
@@ -566,14 +567,26 @@ impl CliProxyApiQuotaSegment {
                     cached_at: Utc::now().to_rfc3339(),
                 };
                 self.save_cache(&cache);
-            }
-            if fetched.is_empty() {
-                // Fall back to cached data if fetch fails
-                cached_data.map(|c| c.quotas).unwrap_or_default()
+                (fetched, false, false)
+            } else if let Some(cache) = cached_data {
+                // Fetch failed, fall back to stale cache
+                (cache.quotas, true, true)
             } else {
-                fetched
+                // Fetch failed and no cache available
+                (Vec::new(), true, false)
             }
         };
+
+        // If fetch failed and no data available, show error message
+        if fetch_failed && quotas.is_empty() {
+            let mut metadata = HashMap::new();
+            metadata.insert("raw_text".to_string(), "true".to_string());
+            return Some(SegmentData {
+                primary: "\x1b[90m获取额度失败\x1b[0m".to_string(),
+                secondary: String::new(),
+                metadata,
+            });
+        }
 
         if quotas.is_empty() {
             return None;
@@ -585,11 +598,24 @@ impl CliProxyApiQuotaSegment {
             return None;
         }
 
+        // Apply gray color if using stale cache
+        let display_primary = if using_stale_cache {
+            // Remove all ANSI color codes and apply gray with prefix
+            let ansi_regex = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+            let plain_text = ansi_regex.replace_all(&primary, "");
+            format!("\x1b[90m获取额度失败:{}\x1b[0m", plain_text)
+        } else {
+            primary
+        };
+
         let mut metadata = HashMap::new();
         metadata.insert("raw_text".to_string(), "true".to_string());
+        if using_stale_cache {
+            metadata.insert("stale_cache".to_string(), "true".to_string());
+        }
 
         Some(SegmentData {
-            primary,
+            primary: display_primary,
             secondary: String::new(),
             metadata,
         })

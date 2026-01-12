@@ -12,6 +12,8 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CliProxyApiQuotaOptionField {
+    Host,
+    Key,
     Alias(TrackedModel),
     Color(TrackedModel),
     Separator,
@@ -60,6 +62,8 @@ impl CliProxyApiQuotaOptionsComponent {
 
     fn fields() -> &'static [CliProxyApiQuotaOptionField] {
         &[
+            CliProxyApiQuotaOptionField::Host,
+            CliProxyApiQuotaOptionField::Key,
             CliProxyApiQuotaOptionField::Alias(TrackedModel::Opus),
             CliProxyApiQuotaOptionField::Color(TrackedModel::Opus),
             CliProxyApiQuotaOptionField::Alias(TrackedModel::Gemini3Pro),
@@ -133,7 +137,7 @@ impl CliProxyApiQuotaOptionsComponent {
 
         // Avoid covering bottom help area
         let popup_width = 70_u16.min(area.width.saturating_sub(4));
-        let popup_height = 16_u16;
+        let popup_height = 18_u16;
         let max_y = area.height.saturating_sub(popup_height + 4);
         let popup_y = if max_y > 2 {
             (area.height.saturating_sub(popup_height)) / 2
@@ -174,6 +178,36 @@ impl CliProxyApiQuotaOptionsComponent {
             let mut spans = vec![Span::styled(cursor.to_string(), cursor_style)];
 
             match field {
+                CliProxyApiQuotaOptionField::Host => {
+                    let host = segment
+                        .options
+                        .get("host")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("http://localhost:8317");
+                    spans.push(Span::raw("Host: ".to_string()));
+                    spans.push(Span::styled(
+                        host.to_string(),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                CliProxyApiQuotaOptionField::Key => {
+                    let key = segment
+                        .options
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("nbkey");
+                    // Mask the key for security
+                    let masked = if key.len() > 4 {
+                        format!("{}****", &key[..4])
+                    } else {
+                        "****".to_string()
+                    };
+                    spans.push(Span::raw("Key: ".to_string()));
+                    spans.push(Span::styled(
+                        masked,
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ));
+                }
                 CliProxyApiQuotaOptionField::Alias(model) => {
                     let alias = Self::get_alias(&segment.options, *model);
                     spans.push(Span::raw(format!("{} Alias: ", model.display_name())));

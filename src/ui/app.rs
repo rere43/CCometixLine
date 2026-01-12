@@ -30,6 +30,8 @@ use std::io;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextInputTarget {
     SaveThemeName,
+    CliProxyApiQuotaHost,
+    CliProxyApiQuotaKey,
     CliProxyApiQuotaAlias(TrackedModel),
     CliProxyApiQuotaSeparator,
 }
@@ -780,6 +782,28 @@ impl App {
     fn apply_text_input(&mut self, value: String) {
         match self.text_input_target {
             Some(TextInputTarget::SaveThemeName) => self.save_as_new_theme(&value),
+            Some(TextInputTarget::CliProxyApiQuotaHost) => {
+                if let Some(segment) = self.config.segments.get_mut(self.selected_segment) {
+                    if segment.id == SegmentId::CliProxyApiQuota {
+                        segment
+                            .options
+                            .insert("host".to_string(), Value::String(value));
+                        self.status_message = Some("Updated CPA Quota host".to_string());
+                        self.preview.update_preview(&self.config);
+                    }
+                }
+            }
+            Some(TextInputTarget::CliProxyApiQuotaKey) => {
+                if let Some(segment) = self.config.segments.get_mut(self.selected_segment) {
+                    if segment.id == SegmentId::CliProxyApiQuota {
+                        segment
+                            .options
+                            .insert("key".to_string(), Value::String(value));
+                        self.status_message = Some("Updated CPA Quota key".to_string());
+                        self.preview.update_preview(&self.config);
+                    }
+                }
+            }
             Some(TextInputTarget::CliProxyApiQuotaSeparator) => {
                 if let Some(segment) = self.config.segments.get_mut(self.selected_segment) {
                     if segment.id == SegmentId::CliProxyApiQuota {
@@ -816,6 +840,32 @@ impl App {
         }
 
         match self.cli_proxy_api_quota_options.selected_field() {
+            CliProxyApiQuotaOptionField::Host => {
+                let current = segment
+                    .options
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("http://localhost:8317");
+                self.name_input.open_with_value(
+                    "CLI Proxy API Host",
+                    "Enter host URL...",
+                    current,
+                );
+                self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaHost);
+            }
+            CliProxyApiQuotaOptionField::Key => {
+                let current = segment
+                    .options
+                    .get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("nbkey");
+                self.name_input.open_with_value(
+                    "CLI Proxy API Key",
+                    "Enter management key...",
+                    current,
+                );
+                self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaKey);
+            }
             CliProxyApiQuotaOptionField::Alias(model) => {
                 let current = segment
                     .options
