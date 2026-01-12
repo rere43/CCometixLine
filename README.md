@@ -82,6 +82,12 @@ The statusline shows: Model | Directory | Git Branch Status | Context Window Inf
 npm install -g @kei233/ccline
 ```
 
+If you have installed the official package before (or any other package that provides the `ccline` command), force reinstall to ensure `ccline` is replaced:
+
+```bash
+npm i -g --force @kei233/ccline@latest
+```
+
 ### Claude Code Configuration (Required)
 
 Regardless of installation method, you need to configure Claude Code's `settings.json` to enable the statusline:

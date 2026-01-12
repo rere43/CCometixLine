@@ -82,6 +82,12 @@ ccline --config    # 或 ccline -c
 npm install -g @kei233/ccline
 ```
 
+如果你之前安装过原版（或任何同样提供 `ccline` 命令的包），建议使用强制安装以确保覆盖：
+
+```bash
+npm i -g --force @kei233/ccline@latest
+```
+
 ### Claude Code 配置（必需）
 
 无论使用哪种安装方式，都需要配置 Claude Code 的 `settings.json` 来启用状态栏：

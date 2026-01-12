@@ -8,6 +8,12 @@ CCometixLine - High-performance Claude Code StatusLine tool
 npm install -g @kei233/ccline
 ```
 
+If you have installed the official package before (or any other package that provides the `ccline` command), force reinstall to ensure `ccline` is replaced:
+
+```bash
+npm i -g --force @kei233/ccline@latest
+```
+
 ## Features
 
 - 🚀 **Fast**: Written in Rust for maximum performance
