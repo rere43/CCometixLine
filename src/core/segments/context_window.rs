@@ -2,11 +2,15 @@ use super::{Segment, SegmentData};
 use crate::config::{InputData, ModelConfig, SegmentId, TranscriptEntry};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub struct ContextWindowSegment;
+
+const TRANSCRIPT_TAIL_BYTES: u64 = 4 * 1024 * 1024;
+const TRANSCRIPT_TAIL_MAX_LINES: usize = 4000;
+const LEAF_UUID_SEARCH_MAX_FILES: usize = 20;
 
 impl ContextWindowSegment {
     pub fn new() -> Self {
@@ -15,7 +19,7 @@ impl ContextWindowSegment {
 
     /// Get context limit for the specified model
     fn get_context_limit_for_model(model_id: &str) -> u32 {
-        let model_config = ModelConfig::load();
+        let model_config = ModelConfig::load_cached();
         model_config.get_context_limit(model_id)
     }
 }
@@ -86,39 +90,29 @@ impl Segment for ContextWindowSegment {
 fn parse_transcript_usage<P: AsRef<Path>>(transcript_path: P) -> Option<u32> {
     let path = transcript_path.as_ref();
 
-    // Try to parse from current transcript file
-    if let Some(usage) = try_parse_transcript_file(path) {
-        return Some(usage);
-    }
-
-    // If file doesn't exist, try to find usage from project history
     if !path.exists() {
-        if let Some(usage) = try_find_usage_from_project_history(path) {
-            return Some(usage);
-        }
-    }
-
-    None
-}
-
-fn try_parse_transcript_file(path: &Path) -> Option<u32> {
-    let file = fs::File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader
-        .lines()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
-
-    if lines.is_empty() {
         return None;
     }
 
+    try_parse_transcript_file(path)
+}
+
+fn try_parse_transcript_file(path: &Path) -> Option<u32> {
+    let (tail, started_mid_file) = read_transcript_tail(path)?;
+    let lines = tail_lines(&tail, started_mid_file, TRANSCRIPT_TAIL_MAX_LINES);
+
     // Check if the last line is a summary
-    let last_line = lines.last()?.trim();
+    let last_line = lines.iter().rev().find(|l| !l.trim().is_empty())?.trim();
     if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(last_line) {
         if entry.r#type.as_deref() == Some("summary") {
             // Handle summary case: find usage by leafUuid
             if let Some(leaf_uuid) = &entry.leaf_uuid {
+                // Prefer searching within the current transcript tail first to avoid
+                // expensive full-project scans during Claude Code startup.
+                if let Some(usage) = search_uuid_in_lines(&lines, leaf_uuid) {
+                    return Some(usage);
+                }
+
                 let project_dir = path.parent()?;
                 return find_usage_by_leaf_uuid(leaf_uuid, project_dir);
             }
@@ -148,18 +142,10 @@ fn try_parse_transcript_file(path: &Path) -> Option<u32> {
 }
 
 fn find_usage_by_leaf_uuid(leaf_uuid: &str, project_dir: &Path) -> Option<u32> {
-    // Search for the leafUuid across all session files in the project directory
-    let entries = fs::read_dir(project_dir).ok()?;
+    let session_files = get_recent_session_files(project_dir, LEAF_UUID_SEARCH_MAX_FILES)?;
 
-    for entry in entries {
-        let entry = entry.ok()?;
-        let path = entry.path();
-
-        if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
-            continue;
-        }
-
-        if let Some(usage) = search_uuid_in_file(&path, leaf_uuid) {
+    for path in session_files {
+        if let Some(usage) = search_uuid_in_file_tail(&path, leaf_uuid) {
             return Some(usage);
         }
     }
@@ -167,49 +153,53 @@ fn find_usage_by_leaf_uuid(leaf_uuid: &str, project_dir: &Path) -> Option<u32> {
     None
 }
 
-fn search_uuid_in_file(path: &Path, target_uuid: &str) -> Option<u32> {
-    let file = fs::File::open(path).ok()?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader
-        .lines()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap_or_default();
+fn search_uuid_in_file_tail(path: &Path, target_uuid: &str) -> Option<u32> {
+    let (tail, started_mid_file) = read_transcript_tail(path)?;
+    let lines = tail_lines(&tail, started_mid_file, TRANSCRIPT_TAIL_MAX_LINES);
+    search_uuid_in_lines(&lines, target_uuid)
+}
 
+fn search_uuid_in_lines(lines: &[&str], target_uuid: &str) -> Option<u32> {
     // Find the message with target_uuid
-    for line in &lines {
+    for line in lines {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
 
         if let Ok(entry) = serde_json::from_str::<TranscriptEntry>(line) {
-            if let Some(uuid) = &entry.uuid {
-                if uuid == target_uuid {
-                    // Found the target message, check its type
-                    if entry.r#type.as_deref() == Some("assistant") {
-                        // Direct assistant message with usage
-                        if let Some(message) = &entry.message {
-                            if let Some(raw_usage) = &message.usage {
-                                let normalized = raw_usage.clone().normalize();
-                                return Some(normalized.display_tokens());
-                            }
-                        }
-                    } else if entry.r#type.as_deref() == Some("user") {
-                        // User message, need to find the parent assistant message
-                        if let Some(parent_uuid) = &entry.parent_uuid {
-                            return find_assistant_message_by_uuid(&lines, parent_uuid);
-                        }
+            let Some(uuid) = &entry.uuid else {
+                continue;
+            };
+
+            if uuid != target_uuid {
+                continue;
+            }
+
+            // Found the target message, check its type
+            if entry.r#type.as_deref() == Some("assistant") {
+                // Direct assistant message with usage
+                if let Some(message) = &entry.message {
+                    if let Some(raw_usage) = &message.usage {
+                        let normalized = raw_usage.clone().normalize();
+                        return Some(normalized.display_tokens());
                     }
-                    break;
+                }
+            } else if entry.r#type.as_deref() == Some("user") {
+                // User message, need to find the parent assistant message
+                if let Some(parent_uuid) = &entry.parent_uuid {
+                    return find_assistant_message_by_uuid(lines, parent_uuid);
                 }
             }
+
+            break;
         }
     }
 
     None
 }
 
-fn find_assistant_message_by_uuid(lines: &[String], target_uuid: &str) -> Option<u32> {
+fn find_assistant_message_by_uuid(lines: &[&str], target_uuid: &str) -> Option<u32> {
     for line in lines {
         let line = line.trim();
         if line.is_empty() {
@@ -233,17 +223,45 @@ fn find_assistant_message_by_uuid(lines: &[String], target_uuid: &str) -> Option
     None
 }
 
-fn try_find_usage_from_project_history(transcript_path: &Path) -> Option<u32> {
-    let project_dir = transcript_path.parent()?;
+fn read_transcript_tail(path: &Path) -> Option<(String, bool)> {
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
 
-    // Find the most recent session file in the project directory
-    let mut session_files: Vec<PathBuf> = Vec::new();
+    let start = len.saturating_sub(TRANSCRIPT_TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    Some((String::from_utf8_lossy(&buf).into_owned(), start > 0))
+}
+
+fn tail_lines<'a>(tail: &'a str, started_mid_file: bool, max_lines: usize) -> Vec<&'a str> {
+    let tail = if started_mid_file {
+        match tail.split_once('\n') {
+            Some((_, rest)) => rest,
+            None => "",
+        }
+    } else {
+        tail
+    };
+
+    let mut lines: Vec<&'a str> = Vec::with_capacity(max_lines);
+    for line in tail.lines().rev() {
+        if lines.len() >= max_lines {
+            break;
+        }
+        lines.push(line.trim_end_matches('\r'));
+    }
+    lines.reverse();
+    lines
+}
+
+fn get_recent_session_files(project_dir: &Path, limit: usize) -> Option<Vec<PathBuf>> {
     let entries = fs::read_dir(project_dir).ok()?;
 
-    for entry in entries {
-        let entry = entry.ok()?;
+    let mut session_files: Vec<PathBuf> = Vec::new();
+    for entry in entries.flatten() {
         let path = entry.path();
-
         if path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
             session_files.push(path);
         }
@@ -261,12 +279,6 @@ fn try_find_usage_from_project_history(transcript_path: &Path) -> Option<u32> {
     });
     session_files.reverse();
 
-    // Try to find usage from the most recent session
-    for session_path in &session_files {
-        if let Some(usage) = try_parse_transcript_file(session_path) {
-            return Some(usage);
-        }
-    }
-
-    None
+    session_files.truncate(limit);
+    Some(session_files)
 }

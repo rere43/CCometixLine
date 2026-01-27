@@ -23,6 +23,12 @@ pub struct GitSegment {
     show_sha: bool,
 }
 
+enum GitInfoProbe {
+    Info(GitInfo),
+    NeedFallback,
+    None,
+}
+
 impl Default for GitSegment {
     fn default() -> Self {
         Self::new()
@@ -40,6 +46,106 @@ impl GitSegment {
     }
 
     fn get_git_info(&self, working_dir: &str) -> Option<GitInfo> {
+        // Fast path: one `git status` call (branch + ahead/behind + dirty state).
+        // Falls back to legacy multi-call method for older Git versions.
+        match self.get_git_info_porcelain_v2(working_dir) {
+            GitInfoProbe::Info(info) => Some(info),
+            GitInfoProbe::NeedFallback => self.get_git_info_legacy(working_dir),
+            GitInfoProbe::None => None,
+        }
+    }
+
+    fn get_git_info_porcelain_v2(&self, working_dir: &str) -> GitInfoProbe {
+        let output = Command::new("git")
+            .args(["--no-optional-locks", "status", "--porcelain=2", "--branch"])
+            .current_dir(working_dir)
+            .output();
+
+        let Ok(output) = output else {
+            return GitInfoProbe::None;
+        };
+
+        if !output.status.success() {
+            // Only fall back when the local Git is too old to support porcelain v2.
+            // For "not a git repository" (or other runtime errors), return None directly.
+            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+            let looks_like_old_git = stderr.contains("unknown option")
+                || stderr.contains("unknown switch")
+                || stderr.contains("unknown argument")
+                || stderr.contains("invalid option");
+            if looks_like_old_git && stderr.contains("porcelain") {
+                return GitInfoProbe::NeedFallback;
+            }
+            return GitInfoProbe::None;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        let mut branch: Option<String> = None;
+        let mut status = GitStatus::Clean;
+        let mut ahead: u32 = 0;
+        let mut behind: u32 = 0;
+        let mut has_changes = false;
+
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Some(head) = line.strip_prefix("# branch.head ") {
+                let head = head.trim();
+                branch = Some(if head == "(detached)" {
+                    "detached".to_string()
+                } else {
+                    head.to_string()
+                });
+                continue;
+            }
+
+            if let Some(ab) = line.strip_prefix("# branch.ab ") {
+                for part in ab.split_whitespace() {
+                    if let Some(num) = part.strip_prefix('+') {
+                        ahead = num.parse().unwrap_or(0);
+                    } else if let Some(num) = part.strip_prefix('-') {
+                        behind = num.parse().unwrap_or(0);
+                    }
+                }
+                continue;
+            }
+
+            if line.starts_with('#') {
+                continue;
+            }
+
+            // Porcelain v2: non-header lines indicate working tree changes.
+            if line.starts_with("u ") {
+                status = GitStatus::Conflicts;
+                break;
+            }
+            has_changes = true;
+        }
+
+        if status == GitStatus::Clean && has_changes {
+            status = GitStatus::Dirty;
+        }
+
+        let sha = if self.show_sha {
+            self.get_sha(working_dir)
+        } else {
+            None
+        };
+
+        GitInfoProbe::Info(GitInfo {
+            branch: branch.unwrap_or_else(|| "detached".to_string()),
+            status,
+            ahead,
+            behind,
+            sha,
+        })
+    }
+
+    fn get_git_info_legacy(&self, working_dir: &str) -> Option<GitInfo> {
         if !self.is_git_repository(working_dir) {
             return None;
         }

@@ -204,13 +204,19 @@ impl PreviewComponent {
                             segment_config
                                 .options
                                 .get(key)
-                                .and_then(|v| serde_json::from_value::<crate::config::AnsiColor>(v.clone()).ok())
+                                .and_then(|v| {
+                                    serde_json::from_value::<crate::config::AnsiColor>(v.clone())
+                                        .ok()
+                                })
                                 .unwrap_or(default)
                         };
 
                         let opus = CliProxyApiQuotaSegment::apply_foreground_color(
                             &format!("{}:27%", alias("opus_alias", "opus")),
-                            &color("opus_color", crate::config::AnsiColor::Color256 { c256: 214 }),
+                            &color(
+                                "opus_color",
+                                crate::config::AnsiColor::Color256 { c256: 214 },
+                            ),
                         );
                         let g3p = CliProxyApiQuotaSegment::apply_foreground_color(
                             &format!("{}:100%", alias("gemini3pro_alias", "3pro")),

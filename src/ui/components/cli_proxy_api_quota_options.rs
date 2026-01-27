@@ -187,7 +187,9 @@ impl CliProxyApiQuotaOptionsComponent {
                     spans.push(Span::raw("Host: ".to_string()));
                     spans.push(Span::styled(
                         host.to_string(),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 CliProxyApiQuotaOptionField::Key => {
@@ -205,7 +207,9 @@ impl CliProxyApiQuotaOptionsComponent {
                     spans.push(Span::raw("Key: ".to_string()));
                     spans.push(Span::styled(
                         masked,
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 CliProxyApiQuotaOptionField::Alias(model) => {
@@ -213,7 +217,9 @@ impl CliProxyApiQuotaOptionsComponent {
                     spans.push(Span::raw(format!("{} Alias: ", model.display_name())));
                     spans.push(Span::styled(
                         alias,
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
                 CliProxyApiQuotaOptionField::Color(model) => {
@@ -240,7 +246,9 @@ impl CliProxyApiQuotaOptionsComponent {
                     spans.push(Span::raw("Separator: ".to_string()));
                     spans.push(Span::styled(
                         sep.to_string(),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     ));
                 }
             }

@@ -181,7 +181,8 @@ impl AliasEditorApp {
             display_name: String::new(),
             context_limit: None,
         });
-        self.name_input.open("Add New Alias", "Enter Model ID (exact match):");
+        self.name_input
+            .open("Add New Alias", "Enter Model ID (exact match):");
     }
 
     fn start_edit_alias(&mut self) {
@@ -193,7 +194,7 @@ impl AliasEditorApp {
                 self.name_input.open_with_value(
                     "Edit Alias",
                     "Enter Model ID (exact match):",
-                    &alias.id
+                    &alias.id,
                 );
             }
         }
@@ -228,20 +229,28 @@ impl AliasEditorApp {
                     }
 
                     // Validate: ID must be unique (except when editing the same entry)
-                    let is_duplicate = self.config.model_aliases.iter().enumerate().any(|(i, a)| {
-                        a.id == trimmed_id && self.editing_index != Some(i)
-                    });
+                    let is_duplicate = self
+                        .config
+                        .model_aliases
+                        .iter()
+                        .enumerate()
+                        .any(|(i, a)| a.id == trimmed_id && self.editing_index != Some(i));
                     if is_duplicate {
-                        self.status_message = Some(format!("Error: Model ID '{}' already exists", trimmed_id));
+                        self.status_message =
+                            Some(format!("Error: Model ID '{}' already exists", trimmed_id));
                         return;
                     }
 
                     alias.id = trimmed_id;
                     self.input_mode = InputMode::EditingName;
                     self.name_input.open_with_value(
-                        if self.editing_index.is_some() { "Edit Alias" } else { "Add New Alias" },
+                        if self.editing_index.is_some() {
+                            "Edit Alias"
+                        } else {
+                            "Add New Alias"
+                        },
                         "Enter Display Name:",
-                        &alias.display_name
+                        &alias.display_name,
                     );
                 }
                 InputMode::EditingName => {
@@ -249,17 +258,25 @@ impl AliasEditorApp {
 
                     // Validate: Display name must not be empty
                     if trimmed_name.is_empty() {
-                        self.status_message = Some("Error: Display name cannot be empty".to_string());
+                        self.status_message =
+                            Some("Error: Display name cannot be empty".to_string());
                         return;
                     }
 
                     alias.display_name = trimmed_name;
                     self.input_mode = InputMode::EditingContext;
-                    let limit_str = alias.context_limit.map(|l| l.to_string()).unwrap_or_default();
+                    let limit_str = alias
+                        .context_limit
+                        .map(|l| l.to_string())
+                        .unwrap_or_default();
                     self.name_input.open_with_value(
-                        if self.editing_index.is_some() { "Edit Alias" } else { "Add New Alias" },
+                        if self.editing_index.is_some() {
+                            "Edit Alias"
+                        } else {
+                            "Add New Alias"
+                        },
                         "Enter Context Limit (optional, press Enter to skip):",
-                        &limit_str
+                        &limit_str,
                     );
                 }
                 InputMode::EditingContext => {
@@ -268,12 +285,14 @@ impl AliasEditorApp {
                         alias.context_limit = None;
                     } else if let Ok(limit) = trimmed.parse::<u32>() {
                         if limit == 0 {
-                            self.status_message = Some("Error: Context limit must be greater than 0".to_string());
+                            self.status_message =
+                                Some("Error: Context limit must be greater than 0".to_string());
                             return;
                         }
                         alias.context_limit = Some(limit);
                     } else {
-                        self.status_message = Some(format!("Error: '{}' is not a valid number", trimmed));
+                        self.status_message =
+                            Some(format!("Error: '{}' is not a valid number", trimmed));
                         return;
                     }
 
@@ -319,8 +338,14 @@ impl AliasEditorApp {
             let mut aliases_str = String::new();
             for alias in &self.config.model_aliases {
                 aliases_str.push_str("[[aliases]]\n");
-                aliases_str.push_str(&format!("id = \"{}\"\n", Self::escape_toml_string(&alias.id)));
-                aliases_str.push_str(&format!("display_name = \"{}\"\n", Self::escape_toml_string(&alias.display_name)));
+                aliases_str.push_str(&format!(
+                    "id = \"{}\"\n",
+                    Self::escape_toml_string(&alias.id)
+                ));
+                aliases_str.push_str(&format!(
+                    "display_name = \"{}\"\n",
+                    Self::escape_toml_string(&alias.display_name)
+                ));
                 if let Some(limit) = alias.context_limit {
                     aliases_str.push_str(&format!("context_limit = {}\n", limit));
                 }
@@ -376,7 +401,9 @@ impl AliasEditorApp {
                 // Inside alias block: skip until we hit another section or empty line followed by non-alias content
                 if in_alias_block {
                     // Check if this line starts a new section
-                    if trimmed.starts_with("[[") || (trimmed.starts_with('[') && !trimmed.starts_with("[[")) {
+                    if trimmed.starts_with("[[")
+                        || (trimmed.starts_with('[') && !trimmed.starts_with("[["))
+                    {
                         in_alias_block = false;
                         new_lines.push(line.to_string());
                     }
@@ -401,7 +428,8 @@ impl AliasEditorApp {
                 }
 
                 // Insert aliases
-                let alias_lines: Vec<String> = aliases_toml.lines().map(|s| s.to_string()).collect();
+                let alias_lines: Vec<String> =
+                    aliases_toml.lines().map(|s| s.to_string()).collect();
                 for (i, alias_line) in alias_lines.into_iter().enumerate() {
                     new_lines.insert(insert_pos + i, alias_line);
                 }
@@ -439,29 +467,42 @@ impl AliasEditorApp {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),      // Title
-                Constraint::Min(5),         // List
+                Constraint::Length(3),           // Title
+                Constraint::Min(5),              // List
                 Constraint::Length(help_height), // Help/Status
             ])
             .split(size);
 
         // Title
-        let title = Paragraph::new(format!("Model Aliases Editor ({})", self.config_path.display()))
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .alignment(ratatui::layout::Alignment::Center);
+        let title = Paragraph::new(format!(
+            "Model Aliases Editor ({})",
+            self.config_path.display()
+        ))
+        .block(Block::default().borders(Borders::ALL))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(ratatui::layout::Alignment::Center);
         f.render_widget(title, chunks[0]);
 
         // List
-        let items: Vec<ListItem> = self.config.model_aliases
+        let items: Vec<ListItem> = self
+            .config
+            .model_aliases
             .iter()
             .map(|alias| {
-                let limit_str = alias.context_limit
+                let limit_str = alias
+                    .context_limit
                     .map(|l| format!(" ({}k)", l / 1000))
                     .unwrap_or_default();
 
                 let content = Line::from(vec![
-                    Span::styled(format!("{:<30}", alias.display_name), Style::default().fg(Color::Green)),
+                    Span::styled(
+                        format!("{:<30}", alias.display_name),
+                        Style::default().fg(Color::Green),
+                    ),
                     Span::raw(" │ "),
                     Span::styled(&alias.id, Style::default().fg(Color::Cyan)),
                     Span::styled(limit_str, Style::default().fg(Color::Yellow)),
@@ -472,24 +513,33 @@ impl AliasEditorApp {
 
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title("Aliases"))
-            .highlight_style(Style::default().bg(Color::Cyan).fg(Color::Black).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
             .highlight_symbol(">> ");
 
         f.render_stateful_widget(list, chunks[1], &mut self.state);
 
         // Help + Status
         let help_text = "[A] Add  [E/Enter] Edit  [D/Del] Delete  [S] Save  [Esc/Q] Quit";
-        let mut lines = vec![
-            Line::from(Span::styled(help_text, Style::default().fg(Color::Gray)))
-        ];
+        let mut lines = vec![Line::from(Span::styled(
+            help_text,
+            Style::default().fg(Color::Gray),
+        ))];
 
         if let Some(msg) = &self.status_message {
             lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(msg.clone(), Style::default().fg(Color::Yellow))));
+            lines.push(Line::from(Span::styled(
+                msg.clone(),
+                Style::default().fg(Color::Yellow),
+            )));
         }
 
-        let status = Paragraph::new(lines)
-            .block(Block::default().borders(Borders::ALL).title("Help"));
+        let status =
+            Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(status, chunks[2]);
 
         // Popup

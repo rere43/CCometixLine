@@ -1,6 +1,9 @@
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::RwLock;
+use std::time::SystemTime;
 
 /// Model alias entry for exact model ID matching
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,40 +178,54 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             model_aliases: vec![],
-            model_entries: vec![
-                // 1M context models (put first for priority matching)
-                ModelEntry {
-                    pattern: "[1m]".to_string(),
-                    display_name: "Sonnet 4.5 1M".to_string(),
-                    context_limit: 1_000_000,
-                },
-                ModelEntry {
-                    pattern: "claude-3-7-sonnet".to_string(),
-                    display_name: "Sonnet 3.7".to_string(),
-                    context_limit: 200_000,
-                },
-                // Third-party models
-                ModelEntry {
-                    pattern: "glm-4.5".to_string(),
-                    display_name: "GLM-4.5".to_string(),
-                    context_limit: 128_000,
-                },
-                ModelEntry {
-                    pattern: "kimi-k2-turbo".to_string(),
-                    display_name: "Kimi K2 Turbo".to_string(),
-                    context_limit: 128_000,
-                },
-                ModelEntry {
-                    pattern: "kimi-k2".to_string(),
-                    display_name: "Kimi K2".to_string(),
-                    context_limit: 128_000,
-                },
-                ModelEntry {
-                    pattern: "qwen3-coder".to_string(),
-                    display_name: "Qwen Coder".to_string(),
-                    context_limit: 256_000,
-                },
-            ],
+            model_entries: vec![],
         }
+    }
+}
+
+/// Cached model config with mtime tracking
+struct CachedModelConfig {
+    config: ModelConfig,
+    mtime: Option<SystemTime>,
+    path: Option<std::path::PathBuf>,
+}
+
+static MODEL_CONFIG_CACHE: Lazy<RwLock<Option<CachedModelConfig>>> =
+    Lazy::new(|| RwLock::new(None));
+
+impl ModelConfig {
+    /// Load with caching - only reloads when file mtime changes
+    pub fn load_cached() -> Self {
+        let config_path =
+            dirs::home_dir().map(|d| d.join(".claude").join("ccline").join("models.toml"));
+
+        let current_mtime = config_path
+            .as_ref()
+            .and_then(|p| fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
+        // Try to use cached version
+        if let Ok(cache_guard) = MODEL_CONFIG_CACHE.read() {
+            if let Some(cached) = cache_guard.as_ref() {
+                // Check if mtime matches (or both are None)
+                if cached.mtime == current_mtime && cached.path == config_path {
+                    return cached.config.clone();
+                }
+            }
+        }
+
+        // Reload from disk
+        let config = Self::load();
+
+        // Update cache
+        if let Ok(mut cache_guard) = MODEL_CONFIG_CACHE.write() {
+            *cache_guard = Some(CachedModelConfig {
+                config: config.clone(),
+                mtime: current_mtime,
+                path: config_path,
+            });
+        }
+
+        config
     }
 }

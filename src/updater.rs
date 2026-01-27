@@ -3,6 +3,17 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "self-update")]
 use chrono::{DateTime, Utc};
 
+#[cfg(feature = "self-update")]
+const UPDATE_CHECK_INTERVAL_HOURS: i64 = 1;
+
+/// Guard for `update_pid` lock staleness.
+///
+/// The statusline process is short-lived; if it crashes mid-check, `update_pid` can remain in the
+/// persisted state file. PIDs can be reused quickly on Windows, causing the lock to "stick" and
+/// the cache to never refresh. Treat the lock as stale after a short TTL.
+#[cfg(feature = "self-update")]
+const UPDATE_PID_LOCK_TTL_SECS: i64 = 5 * 60;
+
 /// Update status enum
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum UpdateStatus {
@@ -42,6 +53,19 @@ pub struct UpdateState {
 }
 
 impl UpdateState {
+    #[cfg(feature = "self-update")]
+    fn is_update_pid_lock_stale(&self) -> bool {
+        let Some(last_check) = self.last_check else {
+            return true;
+        };
+
+        let now = Utc::now();
+        let age_secs = now.signed_duration_since(last_check).num_seconds();
+
+        // If clock moved backwards, consider the lock invalid to avoid permanently skipping checks.
+        age_secs < 0 || age_secs > UPDATE_PID_LOCK_TTL_SECS
+    }
+
     /// Get status bar display text
     pub fn status_text(&self) -> Option<String> {
         match &self.status {
@@ -100,13 +124,38 @@ impl UpdateState {
                 }
             };
 
-            // Trigger background update check if needed
-            if state.should_check_update() {
+            // Ensure current version is always accurate (binary may have been updated).
+            state.current_version = env!("CARGO_PKG_VERSION").to_string();
+
+            // Clear stale "Ready" notification when the installed version already matches/exceeds it.
+            if let UpdateStatus::Ready { version, .. } = &state.status {
+                if let Ok(false) =
+                    crate::updater::github::is_newer_release_version(version, &state.current_version)
+                {
+                    state.status = UpdateStatus::Idle;
+                }
+            }
+
+            // Trigger update check if needed (interval) or if the persisted PID lock looks stale.
+            let should_attempt_check = state.should_check_update()
+                || (state.update_pid.is_some() && state.is_update_pid_lock_stale());
+
+            if should_attempt_check {
                 // Check if another update process is running
-                let should_start_check = if let Some(pid) = state.update_pid {
-                    !Self::is_process_running(pid)
-                } else {
-                    true
+                let should_start_check = match state.update_pid {
+                    None => true,
+                    Some(pid) => {
+                        let running = Self::is_process_running(pid);
+                        let stale = state.is_update_pid_lock_stale();
+
+                        // If the lock is stale or the PID no longer exists, treat it as unlocked.
+                        if stale || !running {
+                            state.update_pid = None;
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 };
 
                 if should_start_check {
@@ -218,11 +267,11 @@ impl UpdateState {
             _ => {}
         }
 
-        // Check time interval (1 hour)
+        // Check time interval
         if let Some(last_check) = self.last_check {
             let now = Utc::now();
             let hours_passed = now.signed_duration_since(last_check).num_hours();
-            hours_passed >= 1
+            hours_passed < 0 || hours_passed >= UPDATE_CHECK_INTERVAL_HOURS
         } else {
             true
         }
@@ -237,6 +286,8 @@ impl UpdateState {
 /// GitHub Release API response structures
 #[cfg(feature = "self-update")]
 pub mod github {
+    use std::time::Duration;
+
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -277,6 +328,64 @@ pub mod github {
                 .iter()
                 .find(|asset| asset.name.contains(&platform_suffix))
         }
+    }
+
+    fn parse_release_version_for_compare(raw: &str) -> Option<[u64; 4]> {
+        let s = raw.trim().trim_start_matches('v');
+
+        // Accept "X.Y.Z-N" where N is a numeric revision used by this repo's release tags/npm.
+        if let Some((base, rev)) = s.split_once('-') {
+            if !rev.is_empty() && rev.chars().all(|c| c.is_ascii_digit()) {
+                let base_parts: Vec<&str> = base.split('.').collect();
+                if base_parts.len() == 3
+                    && base_parts
+                        .iter()
+                        .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+                {
+                    return Some([
+                        base_parts[0].parse().ok()?,
+                        base_parts[1].parse().ok()?,
+                        base_parts[2].parse().ok()?,
+                        rev.parse().ok()?,
+                    ]);
+                }
+            }
+        }
+
+        // Accept "X.Y.Z" or "X.Y.Z.W"
+        let parts: Vec<&str> = s.split('.').collect();
+        if !(parts.len() == 3 || parts.len() == 4) {
+            return None;
+        }
+
+        let mut out = [0u64; 4];
+        for (i, p) in parts.iter().enumerate() {
+            if p.is_empty() || !p.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            out[i] = p.parse().ok()?;
+        }
+        Some(out)
+    }
+
+    /// Compare project versions.
+    ///
+    /// This repo historically uses 4-part tags like `v1.0.9.4` (and npm-normalized `1.0.9-4`).
+    /// These are not SemVer. We treat the 4th component as a monotonically increasing revision.
+    pub fn is_newer_release_version(
+        latest: &str,
+        current: &str,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        if let (Some(latest_v), Some(current_v)) = (
+            parse_release_version_for_compare(latest),
+            parse_release_version_for_compare(current),
+        ) {
+            return Ok(latest_v > current_v);
+        }
+
+        let current = semver::Version::parse(current)?;
+        let latest = semver::Version::parse(latest)?;
+        Ok(latest > current)
     }
 
     /// Get the expected asset name suffix for current platform
@@ -352,7 +461,12 @@ pub mod github {
     pub fn check_for_updates() -> Result<Option<GitHubRelease>, Box<dyn std::error::Error>> {
         let url = "https://api.github.com/repos/Haleclipse/CCometixLine/releases/latest";
 
-        let response = ureq::get(url)
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build();
+
+        let response = agent
+            .get(url)
             .set(
                 "User-Agent",
                 &format!("CCometixLine/{}", env!("CARGO_PKG_VERSION")),
@@ -365,17 +479,46 @@ pub mod github {
             let current_version = env!("CARGO_PKG_VERSION");
             let latest_version = release.version();
 
-            // Compare versions using semver
-            let current = semver::Version::parse(current_version)?;
-            let latest = semver::Version::parse(&latest_version)?;
-
-            if latest > current {
+            if is_newer_release_version(&latest_version, current_version)? {
                 Ok(Some(release))
             } else {
                 Ok(None)
             }
         } else {
             Err(format!("HTTP {}: {}", response.status(), response.status_text()).into())
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn parse_release_version_for_compare_supports_numeric() {
+            assert_eq!(
+                parse_release_version_for_compare("1.0.9"),
+                Some([1, 0, 9, 0])
+            );
+            assert_eq!(
+                parse_release_version_for_compare("v1.0.9.4"),
+                Some([1, 0, 9, 4])
+            );
+        }
+
+        #[test]
+        fn parse_release_version_for_compare_supports_dash_revision() {
+            assert_eq!(
+                parse_release_version_for_compare("1.0.9-4"),
+                Some([1, 0, 9, 4])
+            );
+        }
+
+        #[test]
+        fn is_newer_release_version_handles_revision_scheme() {
+            assert!(is_newer_release_version("1.0.9.4", "1.0.9").unwrap());
+            assert!(is_newer_release_version("1.0.9-4", "1.0.9-3").unwrap());
+            assert!(is_newer_release_version("1.1.0", "1.0.9").unwrap());
+            assert!(!is_newer_release_version("1.0.9", "1.0.9.4").unwrap());
         }
     }
 }

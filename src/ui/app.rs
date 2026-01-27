@@ -1,8 +1,8 @@
 use crate::config::{Config, SegmentId, StyleMode};
 use crate::core::segments::TrackedModel;
 use crate::ui::components::{
-    color_picker::{ColorPickerComponent, NavDirection},
     cli_proxy_api_quota_options::{CliProxyApiQuotaOptionField, CliProxyApiQuotaOptionsComponent},
+    color_picker::{ColorPickerComponent, NavDirection},
     help::HelpComponent,
     icon_selector::IconSelectorComponent,
     name_input::NameInputComponent,
@@ -482,8 +482,12 @@ impl App {
 
         // Render popups on top
         if self.cli_proxy_api_quota_options.is_open {
-            self.cli_proxy_api_quota_options
-                .render(f, f.area(), &self.config, self.selected_segment);
+            self.cli_proxy_api_quota_options.render(
+                f,
+                f.area(),
+                &self.config,
+                self.selected_segment,
+            );
         }
         if self.color_picker.is_open {
             self.color_picker.render(f, f.area());
@@ -578,7 +582,7 @@ impl App {
                                 SegmentId::Session => "Session",
                                 SegmentId::OutputStyle => "Output Style",
                                 SegmentId::Update => "Update",
-                        SegmentId::CliProxyApiQuota => "CLI Proxy API Quota",
+                                SegmentId::CliProxyApiQuota => "CLI Proxy API Quota",
                             };
                             let is_enabled = segment.enabled;
                             self.status_message = Some(format!(
@@ -612,8 +616,7 @@ impl App {
                         if let Some(segment) = self.config.segments.get(self.selected_segment) {
                             if segment.id == SegmentId::CliProxyApiQuota {
                                 self.cli_proxy_api_quota_options.open();
-                                self.status_message =
-                                    Some("Editing CPA Quota options".to_string());
+                                self.status_message = Some("Editing CPA Quota options".to_string());
                             } else {
                                 self.status_message =
                                     Some("Options editor not implemented yet".to_string());
@@ -846,11 +849,8 @@ impl App {
                     .get("host")
                     .and_then(|v| v.as_str())
                     .unwrap_or("http://localhost:8317");
-                self.name_input.open_with_value(
-                    "CLI Proxy API Host",
-                    "Enter host URL...",
-                    current,
-                );
+                self.name_input
+                    .open_with_value("CLI Proxy API Host", "Enter host URL...", current);
                 self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaHost);
             }
             CliProxyApiQuotaOptionField::Key => {
@@ -880,7 +880,8 @@ impl App {
                 self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaAlias(model));
             }
             CliProxyApiQuotaOptionField::Color(model) => {
-                self.color_picker_target = Some(ColorPickerTarget::CliProxyApiQuotaModelColor(model));
+                self.color_picker_target =
+                    Some(ColorPickerTarget::CliProxyApiQuotaModelColor(model));
                 self.color_picker.open();
             }
             CliProxyApiQuotaOptionField::Separator => {
@@ -889,8 +890,11 @@ impl App {
                     .get("separator")
                     .and_then(|v| v.as_str())
                     .unwrap_or(" | ");
-                self.name_input
-                    .open_with_value("CLI Proxy API Quota Separator", "Enter separator...", current);
+                self.name_input.open_with_value(
+                    "CLI Proxy API Quota Separator",
+                    "Enter separator...",
+                    current,
+                );
                 self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaSeparator);
             }
         }

@@ -476,8 +476,11 @@ pub fn collect_all_segments(
     input: &crate::config::InputData,
 ) -> Vec<(SegmentConfig, SegmentData)> {
     use crate::core::segments::*;
+    use std::time::Instant;
 
     let mut results = Vec::new();
+    let profile = std::env::var_os("CCLINE_PROFILE").is_some();
+    let total_start = Instant::now();
 
     for segment_config in &config.segments {
         // Skip disabled segments to avoid unnecessary API requests
@@ -485,6 +488,7 @@ pub fn collect_all_segments(
             continue;
         }
 
+        let segment_start = Instant::now();
         let segment_data = match segment_config.id {
             crate::config::SegmentId::Model => {
                 let segment = ModelSegment::new();
@@ -532,10 +536,21 @@ pub fn collect_all_segments(
                 segment.collect_with_options(&segment_config.options)
             }
         };
+        if profile {
+            eprintln!(
+                "[ccline] {:?}: {}ms",
+                segment_config.id,
+                segment_start.elapsed().as_millis()
+            );
+        }
 
         if let Some(data) = segment_data {
             results.push((segment_config.clone(), data));
         }
+    }
+
+    if profile {
+        eprintln!("[ccline] total: {}ms", total_start.elapsed().as_millis());
     }
 
     results

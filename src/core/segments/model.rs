@@ -31,7 +31,7 @@ impl Segment for ModelSegment {
 
 impl ModelSegment {
     fn format_model_name(&self, id: &str, display_name: &str) -> String {
-        let model_config = ModelConfig::load();
+        let model_config = ModelConfig::load_cached();
 
         // Try to get display name from external config first
         if let Some(config_name) = model_config.get_display_name(id) {

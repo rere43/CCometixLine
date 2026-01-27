@@ -1,6 +1,6 @@
+pub mod cli_proxy_api_quota;
 pub mod context_window;
 pub mod cost;
-pub mod cli_proxy_api_quota;
 pub mod directory;
 pub mod git;
 pub mod model;
@@ -26,9 +26,9 @@ pub struct SegmentData {
 }
 
 // Re-export all segment types
+pub use cli_proxy_api_quota::{CliProxyApiQuotaSegment, TrackedModel};
 pub use context_window::ContextWindowSegment;
 pub use cost::CostSegment;
-pub use cli_proxy_api_quota::{CliProxyApiQuotaSegment, TrackedModel};
 // Re-export helper function for ANSI color formatting
 pub use cli_proxy_api_quota::CliProxyApiQuotaSegment as AnsiColorHelper;
 pub use directory::DirectorySegment;
