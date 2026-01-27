@@ -293,11 +293,7 @@ impl CliProxyApiQuotaSegment {
         serde_json::from_str(&content).ok()
     }
 
-    fn save_cache(&self, cache: &CliProxyApiQuotaCache) {
-        let _ = self.save_cache_checked(cache);
-    }
-
-    fn save_cache_checked(&self, cache: &CliProxyApiQuotaCache) -> Result<(), String> {
+    fn save_cache(&self, cache: &CliProxyApiQuotaCache) -> Result<(), String> {
         let cache_path = Self::get_cache_path().ok_or("无法定位用户目录，无法写入缓存")?;
 
         if let Some(parent) = cache_path.parent() {
@@ -584,71 +580,46 @@ impl CliProxyApiQuotaSegment {
             quotas: fetched,
             cached_at: Utc::now().to_rfc3339(),
         };
-        self.save_cache_checked(&cache)?;
+        self.save_cache(&cache)?;
 
         Ok(cache.quotas.len())
     }
 
     /// Collect quota data using provided options (avoids loading config from disk)
-    /// Uses async background refresh - never blocks on network requests
+    /// Cache-only: never blocks on network requests.
+    /// Use `ccline --refresh-cpa-quota` (or a scheduled task) to refresh the cache.
     pub fn collect_with_options(
         &self,
         options: &HashMap<String, serde_json::Value>,
     ) -> Option<SegmentData> {
-        let host = options
-            .get("host")
-            .and_then(|v| v.as_str())
-            .unwrap_or("http://localhost:8317");
-
-        let key = options
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or("nbkey");
-
         let cache_duration = options
             .get("cache_duration")
             .and_then(|v| v.as_u64())
             .unwrap_or(180);
-
-        let auth_type = options
-            .get("auth_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("all");
 
         let separator = options
             .get("separator")
             .and_then(|v| v.as_str())
             .unwrap_or(" | ");
 
-        // Check cache first
-        let cached_data = self.load_cache();
-        let cache_valid = cached_data
-            .as_ref()
-            .map(|cache| self.is_cache_valid(cache, cache_duration))
-            .unwrap_or(false);
-
-        // If cache is valid, use it directly
-        let quotas = if cache_valid {
-            cached_data.unwrap().quotas
-        } else {
-            // Cache missing or stale - fetch synchronously
-            let fetched = self.fetch_all_quotas(host, key, auth_type);
-            if !fetched.is_empty() {
-                let new_cache = CliProxyApiQuotaCache {
-                    quotas: fetched.clone(),
-                    cached_at: Utc::now().to_rfc3339(),
-                };
-                self.save_cache(&new_cache);
-                fetched
-            } else {
-                // Fetch failed - use stale cache if available
-                cached_data.map(|c| c.quotas).unwrap_or_default()
+        let (quotas, cache_valid) = match self.load_cache() {
+            Some(cache) => {
+                let cache_valid = self.is_cache_valid(&cache, cache_duration);
+                (cache.quotas, cache_valid)
             }
+            None => (Vec::new(), false),
         };
 
         // If no data available at all
         if quotas.is_empty() {
-            return None;
+            let mut metadata = HashMap::new();
+            metadata.insert("raw_text".to_string(), "true".to_string());
+            metadata.insert("cache_missing".to_string(), "true".to_string());
+            return Some(SegmentData {
+                primary: "\x1b[90mcpa:--\x1b[39m".to_string(),
+                secondary: String::new(),
+                metadata,
+            });
         }
 
         let primary = self.format_tracked_output(&quotas, options, separator);
@@ -657,11 +628,20 @@ impl CliProxyApiQuotaSegment {
             return None;
         }
 
+        let display_primary = if cache_valid {
+            primary
+        } else {
+            format!("\x1b[90m~\x1b[39m{}", primary)
+        };
+
         let mut metadata = HashMap::new();
         metadata.insert("raw_text".to_string(), "true".to_string());
+        if !cache_valid {
+            metadata.insert("stale_cache".to_string(), "true".to_string());
+        }
 
         Some(SegmentData {
-            primary,
+            primary: display_primary,
             secondary: String::new(),
             metadata,
         })
