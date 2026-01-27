@@ -3,6 +3,12 @@ use crate::config::{AnsiColor, InputData, SegmentId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 
 /// CLI Proxy API Quota response structures
 #[derive(Debug, Deserialize)]
@@ -124,6 +130,16 @@ impl TrackedModel {
 struct CliProxyApiQuotaCache {
     quotas: Vec<ModelQuota>,
     cached_at: String,
+}
+
+struct RefreshLockGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for RefreshLockGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -552,10 +568,162 @@ impl Segment for CliProxyApiQuotaSegment {
 }
 
 impl CliProxyApiQuotaSegment {
+    fn auto_refresh_enabled(options: &HashMap<String, serde_json::Value>) -> bool {
+        options
+            .get("auto_refresh")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+    }
+
+    fn auto_refresh_cooldown(options: &HashMap<String, serde_json::Value>) -> u64 {
+        options
+            .get("auto_refresh_cooldown")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(60)
+    }
+
+    fn auto_refresh_lock_ttl(options: &HashMap<String, serde_json::Value>) -> u64 {
+        options
+            .get("auto_refresh_lock_ttl")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(600)
+    }
+
+    fn refresh_lock_path() -> Option<std::path::PathBuf> {
+        Self::get_cache_path().map(|p| p.with_file_name(".cli_proxy_api_quota_refresh.lock"))
+    }
+
+    fn refresh_stamp_path() -> Option<std::path::PathBuf> {
+        Self::get_cache_path().map(|p| p.with_file_name(".cli_proxy_api_quota_refresh.stamp"))
+    }
+
+    fn maybe_spawn_refresh(&self, options: &HashMap<String, serde_json::Value>) {
+        if !Self::auto_refresh_enabled(options) {
+            return;
+        }
+
+        let cooldown = Self::auto_refresh_cooldown(options);
+        let lock_ttl = Self::auto_refresh_lock_ttl(options);
+        let now = SystemTime::now();
+
+        // If a refresh is already in progress, don't spawn another.
+        if let Some(lock_path) = Self::refresh_lock_path() {
+            if let Ok(meta) = std::fs::metadata(&lock_path) {
+                if let Ok(modified) = meta.modified() {
+                    if now
+                        .duration_since(modified)
+                        .unwrap_or(Duration::ZERO)
+                        .as_secs()
+                        <= lock_ttl
+                    {
+                        return;
+                    }
+                }
+
+                // Stale lock: best-effort cleanup.
+                let _ = std::fs::remove_file(&lock_path);
+            }
+        }
+
+        let Some(stamp_path) = Self::refresh_stamp_path() else {
+            return;
+        };
+
+        // Throttle spawns to avoid process storms on repeated failures.
+        if let Ok(meta) = std::fs::metadata(&stamp_path) {
+            if let Ok(modified) = meta.modified() {
+                if now
+                    .duration_since(modified)
+                    .unwrap_or(Duration::ZERO)
+                    .as_secs()
+                    <= cooldown
+                {
+                    return;
+                }
+            }
+        }
+
+        if let Some(parent) = stamp_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&stamp_path, Utc::now().to_rfc3339());
+
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+
+        let mut cmd = Command::new(exe);
+        cmd.arg("--refresh-cpa-quota")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        #[cfg(windows)]
+        {
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
+        }
+
+        let _ = cmd.spawn();
+    }
+
+    fn acquire_refresh_lock(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+    ) -> Result<Option<RefreshLockGuard>, String> {
+        let lock_ttl = Self::auto_refresh_lock_ttl(options);
+        let now = SystemTime::now();
+
+        let lock_path = Self::refresh_lock_path().ok_or("无法定位锁文件路径")?;
+
+        if let Ok(meta) = std::fs::metadata(&lock_path) {
+            if let Ok(modified) = meta.modified() {
+                if now
+                    .duration_since(modified)
+                    .unwrap_or(Duration::ZERO)
+                    .as_secs()
+                    <= lock_ttl
+                {
+                    // Another refresh is in progress.
+                    return Ok(None);
+                }
+            }
+
+            // Stale lock: best-effort cleanup.
+            let _ = std::fs::remove_file(&lock_path);
+        }
+
+        let file = match std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&lock_path)
+        {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(None),
+            Err(e) => return Err(format!("创建锁文件失败: {}", e)),
+        };
+
+        let mut file = file;
+        let _ = writeln!(
+            file,
+            "pid={} started_at={}",
+            std::process::id(),
+            Utc::now().to_rfc3339()
+        );
+
+        Ok(Some(RefreshLockGuard { path: lock_path }))
+    }
+
     pub fn refresh_cache_with_options(
         &self,
         options: &HashMap<String, serde_json::Value>,
     ) -> Result<usize, String> {
+        let lock_guard = match self.acquire_refresh_lock(options)? {
+            Some(lock) => lock,
+            None => return Ok(0),
+        };
+
         let host = options
             .get("host")
             .and_then(|v| v.as_str())
@@ -582,12 +750,14 @@ impl CliProxyApiQuotaSegment {
         };
         self.save_cache(&cache)?;
 
+        drop(lock_guard);
         Ok(cache.quotas.len())
     }
 
     /// Collect quota data using provided options (avoids loading config from disk)
     /// Cache-only: never blocks on network requests.
     /// Use `ccline --refresh-cpa-quota` (or a scheduled task) to refresh the cache.
+    /// When cache is missing/expired, optionally spawns a background refresh if `auto_refresh=true`.
     pub fn collect_with_options(
         &self,
         options: &HashMap<String, serde_json::Value>,
@@ -602,13 +772,17 @@ impl CliProxyApiQuotaSegment {
             .and_then(|v| v.as_str())
             .unwrap_or(" | ");
 
-        let (quotas, cache_valid) = match self.load_cache() {
+        let (quotas, cache_valid, cache_present) = match self.load_cache() {
             Some(cache) => {
                 let cache_valid = self.is_cache_valid(&cache, cache_duration);
-                (cache.quotas, cache_valid)
+                (cache.quotas, cache_valid, true)
             }
-            None => (Vec::new(), false),
+            None => (Vec::new(), false, false),
         };
+        let need_refresh = !cache_present || !cache_valid;
+        if need_refresh {
+            self.maybe_spawn_refresh(options);
+        }
 
         // If no data available at all
         if quotas.is_empty() {

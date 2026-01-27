@@ -107,7 +107,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let segment = ccometixline::core::segments::CliProxyApiQuotaSegment::new();
         match segment.refresh_cache_with_options(options) {
             Ok(count) => {
-                println!("CPA 配额缓存已刷新（{} 条）", count);
+                if count == 0 {
+                    println!("CPA 配额刷新已在运行（跳过）");
+                } else {
+                    println!("CPA 配额缓存已刷新（{} 条）", count);
+                }
                 return Ok(());
             }
             Err(err) => {
