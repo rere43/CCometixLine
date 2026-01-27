@@ -88,6 +88,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if cli.refresh_cpa_quota {
+        let mut config = Config::load().unwrap_or_else(|_| Config::default());
+
+        // Apply theme override if provided
+        if let Some(theme) = &cli.theme {
+            config = ccometixline::ui::themes::ThemePresets::get_theme(theme);
+        }
+
+        let empty_options = std::collections::HashMap::new();
+        let options = config
+            .segments
+            .iter()
+            .find(|s| s.id == ccometixline::config::SegmentId::CliProxyApiQuota)
+            .map(|s| &s.options)
+            .unwrap_or(&empty_options);
+
+        let segment = ccometixline::core::segments::CliProxyApiQuotaSegment::new();
+        match segment.refresh_cache_with_options(options) {
+            Ok(count) => {
+                println!("CPA 配额缓存已刷新（{} 条）", count);
+                return Ok(());
+            }
+            Err(err) => {
+                eprintln!("刷新 CPA 配额缓存失败：{}", err);
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Load configuration
     let mut config = Config::load().unwrap_or_else(|_| Config::default());
 

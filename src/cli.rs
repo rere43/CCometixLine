@@ -31,6 +31,10 @@ pub struct Cli {
     /// Patch Claude Code cli.js to disable context warnings
     #[arg(long = "patch")]
     pub patch: Option<String>,
+
+    /// Refresh CLI Proxy API quota cache and exit
+    #[arg(long = "refresh-cpa-quota")]
+    pub refresh_cpa_quota: bool,
 }
 
 impl Cli {

@@ -1,7 +1,6 @@
 use super::{Segment, SegmentData};
 use crate::config::{AnsiColor, InputData, SegmentId};
 use chrono::{DateTime, Utc};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -192,7 +191,11 @@ impl CliProxyApiQuotaSegment {
         Self::tracked_model_for(&quota.model_id, &quota.display_name)
     }
 
-    fn get_alias(&self, options: &HashMap<String, serde_json::Value>, model: TrackedModel) -> String {
+    fn get_alias(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+        model: TrackedModel,
+    ) -> String {
         options
             .get(model.alias_key())
             .and_then(|v| v.as_str())
@@ -200,7 +203,11 @@ impl CliProxyApiQuotaSegment {
             .to_string()
     }
 
-    fn get_color(&self, options: &HashMap<String, serde_json::Value>, model: TrackedModel) -> AnsiColor {
+    fn get_color(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+        model: TrackedModel,
+    ) -> AnsiColor {
         options
             .get(model.color_key())
             .and_then(|v| serde_json::from_value::<AnsiColor>(v.clone()).ok())
@@ -287,14 +294,23 @@ impl CliProxyApiQuotaSegment {
     }
 
     fn save_cache(&self, cache: &CliProxyApiQuotaCache) {
-        if let Some(cache_path) = Self::get_cache_path() {
-            if let Some(parent) = cache_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(json) = serde_json::to_string_pretty(cache) {
-                let _ = std::fs::write(&cache_path, json);
-            }
+        let _ = self.save_cache_checked(cache);
+    }
+
+    fn save_cache_checked(&self, cache: &CliProxyApiQuotaCache) -> Result<(), String> {
+        let cache_path = Self::get_cache_path().ok_or("无法定位用户目录，无法写入缓存")?;
+
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("创建缓存目录失败: {}", e))?;
         }
+
+        let json =
+            serde_json::to_string_pretty(cache).map_err(|e| format!("序列化缓存失败: {}", e))?;
+
+        std::fs::write(&cache_path, json).map_err(|e| format!("写入缓存失败: {}", e))?;
+
+        Ok(())
     }
 
     fn is_cache_valid(&self, cache: &CliProxyApiQuotaCache, cache_duration: u64) -> bool {
@@ -314,7 +330,7 @@ impl CliProxyApiQuotaSegment {
         let response = agent
             .get(&url)
             .set("Authorization", &format!("Bearer {}", key))
-            .timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30))
             .call()
             .ok()?;
 
@@ -358,7 +374,7 @@ impl CliProxyApiQuotaSegment {
             .post(&api_url)
             .set("Authorization", &format!("Bearer {}", key))
             .set("Content-Type", "application/json")
-            .timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .send_json(&payload)
             .ok()?;
 
@@ -527,7 +543,10 @@ impl Segment for CliProxyApiQuotaSegment {
     fn collect(&self, _input: &InputData) -> Option<SegmentData> {
         // This method loads config from disk - use collect_with_options for better performance
         let config = crate::config::Config::load().ok()?;
-        let segment_config = config.segments.iter().find(|s| s.id == SegmentId::CliProxyApiQuota)?;
+        let segment_config = config
+            .segments
+            .iter()
+            .find(|s| s.id == SegmentId::CliProxyApiQuota)?;
         self.collect_with_options(&segment_config.options)
     }
 
@@ -537,8 +556,45 @@ impl Segment for CliProxyApiQuotaSegment {
 }
 
 impl CliProxyApiQuotaSegment {
+    pub fn refresh_cache_with_options(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+    ) -> Result<usize, String> {
+        let host = options
+            .get("host")
+            .and_then(|v| v.as_str())
+            .unwrap_or("http://localhost:8317");
+
+        let key = options
+            .get("key")
+            .and_then(|v| v.as_str())
+            .unwrap_or("nbkey");
+
+        let auth_type = options
+            .get("auth_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("all");
+
+        let fetched = self.fetch_all_quotas(host, key, auth_type);
+        if fetched.is_empty() {
+            return Err("未获取到任何额度数据".to_string());
+        }
+
+        let cache = CliProxyApiQuotaCache {
+            quotas: fetched,
+            cached_at: Utc::now().to_rfc3339(),
+        };
+        self.save_cache_checked(&cache)?;
+
+        Ok(cache.quotas.len())
+    }
+
     /// Collect quota data using provided options (avoids loading config from disk)
-    pub fn collect_with_options(&self, options: &HashMap<String, serde_json::Value>) -> Option<SegmentData> {
+    /// Uses async background refresh - never blocks on network requests
+    pub fn collect_with_options(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+    ) -> Option<SegmentData> {
         let host = options
             .get("host")
             .and_then(|v| v.as_str())
@@ -564,44 +620,33 @@ impl CliProxyApiQuotaSegment {
             .and_then(|v| v.as_str())
             .unwrap_or(" | ");
 
-        // Try to use cache first
+        // Check cache first
         let cached_data = self.load_cache();
-        let use_cached = cached_data
+        let cache_valid = cached_data
             .as_ref()
             .map(|cache| self.is_cache_valid(cache, cache_duration))
             .unwrap_or(false);
 
-        let (quotas, fetch_failed, using_stale_cache) = if use_cached {
-            (cached_data.unwrap().quotas, false, false)
+        // If cache is valid, use it directly
+        let quotas = if cache_valid {
+            cached_data.unwrap().quotas
         } else {
+            // Cache missing or stale - fetch synchronously
             let fetched = self.fetch_all_quotas(host, key, auth_type);
             if !fetched.is_empty() {
-                let cache = CliProxyApiQuotaCache {
+                let new_cache = CliProxyApiQuotaCache {
                     quotas: fetched.clone(),
                     cached_at: Utc::now().to_rfc3339(),
                 };
-                self.save_cache(&cache);
-                (fetched, false, false)
-            } else if let Some(cache) = cached_data {
-                // Fetch failed, fall back to stale cache
-                (cache.quotas, true, true)
+                self.save_cache(&new_cache);
+                fetched
             } else {
-                // Fetch failed and no cache available
-                (Vec::new(), true, false)
+                // Fetch failed - use stale cache if available
+                cached_data.map(|c| c.quotas).unwrap_or_default()
             }
         };
 
-        // If fetch failed and no data available, show error message
-        if fetch_failed && quotas.is_empty() {
-            let mut metadata = HashMap::new();
-            metadata.insert("raw_text".to_string(), "true".to_string());
-            return Some(SegmentData {
-                primary: "\x1b[90m获取额度失败\x1b[0m".to_string(),
-                secondary: String::new(),
-                metadata,
-            });
-        }
-
+        // If no data available at all
         if quotas.is_empty() {
             return None;
         }
@@ -612,24 +657,11 @@ impl CliProxyApiQuotaSegment {
             return None;
         }
 
-        // Apply gray color if using stale cache
-        let display_primary = if using_stale_cache {
-            // Remove all ANSI color codes and apply gray with prefix
-            let ansi_regex = Regex::new(r"\x1b\[[0-9;]*m").unwrap();
-            let plain_text = ansi_regex.replace_all(&primary, "");
-            format!("\x1b[90m获取额度失败:{}\x1b[0m", plain_text)
-        } else {
-            primary
-        };
-
         let mut metadata = HashMap::new();
         metadata.insert("raw_text".to_string(), "true".to_string());
-        if using_stale_cache {
-            metadata.insert("stale_cache".to_string(), "true".to_string());
-        }
 
         Some(SegmentData {
-            primary: display_primary,
+            primary,
             secondary: String::new(),
             metadata,
         })
