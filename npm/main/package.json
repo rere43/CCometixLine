@@ -19,10 +19,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Haleclipse/CCometixLine"
+    "url": "git+https://github.com/rere43/CCometixLine.git"
   },
   "keywords": ["claude", "statusline", "claude-code", "rust", "cli"],
   "author": "Haleclipse",
+  "contributors": ["kei"],
   "license": "MIT",
   "engines": {
     "node": ">=14.0.0"
