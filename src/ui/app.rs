@@ -33,6 +33,7 @@ enum TextInputTarget {
     CliProxyApiQuotaHost,
     CliProxyApiQuotaKey,
     CliProxyApiQuotaAlias(TrackedModel),
+    CliProxyApiQuotaModelOrder,
     CliProxyApiQuotaSeparator,
 }
 
@@ -830,6 +831,37 @@ impl App {
                     }
                 }
             }
+            Some(TextInputTarget::CliProxyApiQuotaModelOrder) => {
+                // Validate: only allow digits 0-3, no duplicates
+                let valid = value.chars().all(|c| c >= '0' && c <= '3')
+                    && value.len() <= 4
+                    && {
+                        let mut seen = [false; 4];
+                        value.chars().all(|c| {
+                            let idx = (c as usize) - ('0' as usize);
+                            if seen[idx] {
+                                false
+                            } else {
+                                seen[idx] = true;
+                                true
+                            }
+                        })
+                    };
+
+                if valid {
+                    if let Some(segment) = self.config.segments.get_mut(self.selected_segment) {
+                        if segment.id == SegmentId::CliProxyApiQuota {
+                            segment
+                                .options
+                                .insert("model_order".to_string(), Value::String(value.clone()));
+                            self.status_message = Some(format!("Model order set to \"{}\"", value));
+                            self.preview.update_preview(&self.config);
+                        }
+                    }
+                } else {
+                    self.status_message = Some("Invalid order (use 0-3, no duplicates)".to_string());
+                }
+            }
             None => {}
         }
     }
@@ -865,6 +897,36 @@ impl App {
                     current,
                 );
                 self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaKey);
+            }
+            CliProxyApiQuotaOptionField::HideOnZero => {
+                // Toggle hide on zero state
+                let current = segment
+                    .options
+                    .get("hide_on_zero")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let segment = self.config.segments.get_mut(self.selected_segment).unwrap();
+                segment
+                    .options
+                    .insert("hide_on_zero".to_string(), Value::Bool(!current));
+                self.status_message = Some(format!(
+                    "Hide on 0% {}",
+                    if !current { "enabled" } else { "disabled" }
+                ));
+                self.preview.update_preview(&self.config);
+            }
+            CliProxyApiQuotaOptionField::ModelOrder => {
+                let current = segment
+                    .options
+                    .get("model_order")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("0123");
+                self.name_input.open_with_value(
+                    "Model Order (0=Opus 1=3Pro 2=3Flash 3=Codex)",
+                    "Enter order (e.g. 0123, 3021, 03)...",
+                    current,
+                );
+                self.text_input_target = Some(TextInputTarget::CliProxyApiQuotaModelOrder);
             }
             CliProxyApiQuotaOptionField::Alias(model) => {
                 let current = segment

@@ -14,6 +14,8 @@ use std::collections::HashMap;
 pub enum CliProxyApiQuotaOptionField {
     Host,
     Key,
+    HideOnZero,
+    ModelOrder,
     Alias(TrackedModel),
     Color(TrackedModel),
     Separator,
@@ -64,13 +66,21 @@ impl CliProxyApiQuotaOptionsComponent {
         &[
             CliProxyApiQuotaOptionField::Host,
             CliProxyApiQuotaOptionField::Key,
+            CliProxyApiQuotaOptionField::HideOnZero,
+            CliProxyApiQuotaOptionField::ModelOrder,
+            CliProxyApiQuotaOptionField::Separator,
+            // Opus
             CliProxyApiQuotaOptionField::Alias(TrackedModel::Opus),
             CliProxyApiQuotaOptionField::Color(TrackedModel::Opus),
+            // Gemini 3 Pro
             CliProxyApiQuotaOptionField::Alias(TrackedModel::Gemini3Pro),
             CliProxyApiQuotaOptionField::Color(TrackedModel::Gemini3Pro),
+            // Gemini 3 Flash
             CliProxyApiQuotaOptionField::Alias(TrackedModel::Gemini3Flash),
             CliProxyApiQuotaOptionField::Color(TrackedModel::Gemini3Flash),
-            CliProxyApiQuotaOptionField::Separator,
+            // Codex 5hr
+            CliProxyApiQuotaOptionField::Alias(TrackedModel::Codex5hr),
+            CliProxyApiQuotaOptionField::Color(TrackedModel::Codex5hr),
         ]
     }
 
@@ -137,7 +147,7 @@ impl CliProxyApiQuotaOptionsComponent {
 
         // Avoid covering bottom help area
         let popup_width = 70_u16.min(area.width.saturating_sub(4));
-        let popup_height = 18_u16;
+        let popup_height = 20_u16;
         let max_y = area.height.saturating_sub(popup_height + 4);
         let popup_y = if max_y > 2 {
             (area.height.saturating_sub(popup_height)) / 2
@@ -210,6 +220,41 @@ impl CliProxyApiQuotaOptionsComponent {
                         Style::default()
                             .fg(Color::Yellow)
                             .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                CliProxyApiQuotaOptionField::HideOnZero => {
+                    let hide_on_zero = segment
+                        .options
+                        .get("hide_on_zero")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    spans.push(Span::raw("Hide on 0%: ".to_string()));
+                    let (text, color) = if hide_on_zero {
+                        ("ON", Color::Green)
+                    } else {
+                        ("OFF", Color::Red)
+                    };
+                    spans.push(Span::styled(
+                        text.to_string(),
+                        Style::default().fg(color).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                CliProxyApiQuotaOptionField::ModelOrder => {
+                    let order = segment
+                        .options
+                        .get("model_order")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("0123");
+                    spans.push(Span::raw("Model Order: ".to_string()));
+                    spans.push(Span::styled(
+                        format!("\"{}\"", order),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    spans.push(Span::styled(
+                        " (0=Opus 1=3Pro 2=3Flash 3=Codex)".to_string(),
+                        Style::default().fg(Color::DarkGray),
                     ));
                 }
                 CliProxyApiQuotaOptionField::Alias(model) => {

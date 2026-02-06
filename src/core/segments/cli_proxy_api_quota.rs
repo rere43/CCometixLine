@@ -72,11 +72,41 @@ struct GeminiQuotaResponse {
     buckets: Option<Vec<GeminiBucket>>,
 }
 
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CodexRateLimitWindow {
+    used_percent: Option<f64>,
+    reset_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CodexRateLimit {
+    primary_window: Option<CodexRateLimitWindow>,
+    secondary_window: Option<CodexRateLimitWindow>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CodexUsageResponse {
+    rate_limit: Option<CodexRateLimit>,
+    plan_type: Option<String>,
+    email: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct CodexAuthFileContent {
+    account_id: Option<String>,
+    chatgpt_account_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TrackedModel {
     Opus,
     Gemini3Pro,
     Gemini3Flash,
+    Codex5hr,
 }
 
 impl TrackedModel {
@@ -85,6 +115,7 @@ impl TrackedModel {
             Self::Opus => "opus_alias",
             Self::Gemini3Pro => "gemini3pro_alias",
             Self::Gemini3Flash => "gemini3flash_alias",
+            Self::Codex5hr => "codex_alias",
         }
     }
 
@@ -93,14 +124,17 @@ impl TrackedModel {
             Self::Opus => "opus_color",
             Self::Gemini3Pro => "gemini3pro_color",
             Self::Gemini3Flash => "gemini3flash_color",
+            Self::Codex5hr => "codex_color",
         }
     }
+
 
     pub fn default_alias(&self) -> &'static str {
         match self {
             Self::Opus => "opus",
             Self::Gemini3Pro => "3pro",
             Self::Gemini3Flash => "3flash",
+            Self::Codex5hr => "codex",
         }
     }
 
@@ -109,6 +143,7 @@ impl TrackedModel {
             Self::Opus => AnsiColor::Color256 { c256: 214 },
             Self::Gemini3Pro => AnsiColor::Color256 { c256: 129 },
             Self::Gemini3Flash => AnsiColor::Color256 { c256: 45 },
+            Self::Codex5hr => AnsiColor::Color256 { c256: 48 },
         }
     }
 
@@ -117,11 +152,12 @@ impl TrackedModel {
             Self::Opus => "Opus",
             Self::Gemini3Pro => "Gemini 3 Pro",
             Self::Gemini3Flash => "Gemini 3 Flash",
+            Self::Codex5hr => "Codex 5hr",
         }
     }
 
     pub fn all() -> &'static [TrackedModel] {
-        &[Self::Opus, Self::Gemini3Pro, Self::Gemini3Flash]
+        &[Self::Opus, Self::Gemini3Pro, Self::Gemini3Flash, Self::Codex5hr]
     }
 }
 
@@ -199,6 +235,9 @@ impl CliProxyApiQuotaSegment {
         if id.contains("gemini-3-flash") || name.contains("gemini 3 flash") {
             return Some(TrackedModel::Gemini3Flash);
         }
+        if id.contains("codex-5hr") || name.contains("5 小时限额") || name.contains("5hr") {
+            return Some(TrackedModel::Codex5hr);
+        }
 
         None
     }
@@ -244,6 +283,36 @@ impl CliProxyApiQuotaSegment {
         format!("{}{}\x1b[39m", prefix, text)
     }
 
+
+    fn parse_model_order(
+        &self,
+        options: &HashMap<String, serde_json::Value>,
+    ) -> Vec<TrackedModel> {
+        let raw = options
+            .get("model_order")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0123");
+        let mut seen = [false; 4];
+        let mut order = Vec::new();
+
+        for ch in raw.chars() {
+            let (idx, model) = match ch {
+                '0' => (0, TrackedModel::Opus),
+                '1' => (1, TrackedModel::Gemini3Pro),
+                '2' => (2, TrackedModel::Gemini3Flash),
+                '3' => (3, TrackedModel::Codex5hr),
+                _ => continue,
+            };
+            if seen[idx] {
+                continue;
+            }
+            seen[idx] = true;
+            order.push(model);
+        }
+
+        order
+    }
+
     fn format_tracked_output(
         &self,
         quotas: &[ModelQuota],
@@ -254,6 +323,7 @@ impl CliProxyApiQuotaSegment {
         struct SumCount {
             sum: f64,
             count: u32,
+            has_failure: bool,
         }
 
         let mut agg: HashMap<TrackedModel, SumCount> = HashMap::new();
@@ -262,28 +332,55 @@ impl CliProxyApiQuotaSegment {
                 continue;
             };
             let entry = agg.entry(model).or_default();
-            entry.sum += quota.remaining_fraction;
-            entry.count += 1;
+            if quota.remaining_fraction < 0.0 {
+                // Mark as having a failure
+                entry.has_failure = true;
+                entry.count += 1;
+            } else {
+                entry.sum += quota.remaining_fraction;
+                entry.count += 1;
+            }
         }
 
+        let ordered_models: Vec<TrackedModel> = self
+            .parse_model_order(options)
+            .into_iter()
+            .filter(|model| agg.get(model).map(|e| e.count > 0).unwrap_or(false))
+            .collect();
+
+        let hide_on_zero = options
+            .get("hide_on_zero")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let mut parts = Vec::new();
-        for model in [
-            TrackedModel::Opus,
-            TrackedModel::Gemini3Pro,
-            TrackedModel::Gemini3Flash,
-        ] {
-            let Some(entry) = agg.get(&model) else {
-                continue;
+        for model in ordered_models {
+            let entry = agg.get(&model).unwrap();
+            let alias = self.get_alias(options, model);
+            let color = self.get_color(options, model);
+
+            // Check if all entries for this model are failures
+            let success_count = entry.count - if entry.has_failure { 1 } else { 0 };
+            let (label, percent) = if entry.has_failure && success_count == 0 {
+                // All failed
+                (format!("{}:失败", alias), None)
+            } else if entry.has_failure {
+                // Some failed, show average of successful ones
+                let avg = entry.sum / success_count as f64;
+                let p = (avg * 100.0).round().clamp(0.0, 100.0) as u8;
+                (format!("{}:{}%*", alias, p), Some(p))
+            } else {
+                // All successful
+                let avg = entry.sum / entry.count as f64;
+                let p = (avg * 100.0).round().clamp(0.0, 100.0) as u8;
+                (format!("{}:{}%", alias, p), Some(p))
             };
-            if entry.count == 0 {
+
+            // Skip if hide_on_zero is enabled and percent is 0
+            if hide_on_zero && percent == Some(0) {
                 continue;
             }
 
-            let avg = entry.sum / entry.count as f64;
-            let percent = (avg * 100.0).round().clamp(0.0, 100.0) as u8;
-            let alias = self.get_alias(options, model);
-            let color = self.get_color(options, model);
-            let label = format!("{}:{}%", alias, percent);
             parts.push(Self::apply_foreground_color(&label, &color));
         }
 
@@ -511,40 +608,208 @@ impl CliProxyApiQuotaSegment {
         quotas
     }
 
-    fn fetch_all_quotas(&self, host: &str, key: &str, auth_type_filter: &str) -> Vec<ModelQuota> {
-        let mut all_quotas = Vec::new();
-
-        let auth_files = match self.get_auth_files(host, key) {
-            Some(files) => files,
-            None => return all_quotas,
+    fn codex_user_agent() -> String {
+        let version = env!("CARGO_PKG_VERSION");
+        let os = match std::env::consts::OS {
+            "macos" => "darwin",
+            other => other,
+        };
+        let arch = match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            "x86" | "i686" => "386",
+            other => other,
         };
 
-        for file in auth_files {
-            // Skip disabled accounts
-            if file.disabled.unwrap_or(false) {
-                continue;
-            }
+        format!("codex_cli_rs/{} ({} {}; {}) WindowsTerminal", version, os, std::env::consts::OS, arch)
+    }
 
-            // Apply type filter
-            if auth_type_filter != "all" && file.auth_type != auth_type_filter {
-                continue;
-            }
+    fn download_auth_file(&self, host: &str, key: &str, name: &str) -> Option<CodexAuthFileContent> {
+        let url = format!("{}/v0/management/auth-files/download?name={}", host, name);
 
-            let quotas = match file.auth_type.as_str() {
-                "antigravity" => self.get_antigravity_quota(host, key, &file.auth_index),
-                "gemini-cli" => {
-                    if let Some(project) =
-                        self.extract_project_from_name(file.name.as_deref().unwrap_or(""))
-                    {
-                        self.get_gemini_cli_quota(host, key, &file.auth_index, &project)
-                    } else {
-                        Vec::new()
+        let agent = ureq::AgentBuilder::new().build();
+        let response = agent
+            .get(&url)
+            .set("Authorization", &format!("Bearer {}", key))
+            .timeout(std::time::Duration::from_secs(10))
+            .call()
+            .ok()?;
+
+        if response.status() == 200 {
+            response.into_json().ok()
+        } else {
+            None
+        }
+    }
+
+    fn get_codex_quota(
+        &self,
+        host: &str,
+        key: &str,
+        auth_index: &str,
+        account_id: Option<&str>,
+    ) -> Vec<ModelQuota> {
+        let mut extra_headers = HashMap::new();
+        extra_headers.insert("User-Agent".to_string(), Self::codex_user_agent());
+        if let Some(id) = account_id {
+            if !id.is_empty() {
+                extra_headers.insert("Chatgpt-Account-Id".to_string(), id.to_string());
+            }
+        }
+
+        let result = self.api_call(
+            host,
+            key,
+            auth_index,
+            "GET",
+            "https://chatgpt.com/backend-api/wham/usage",
+            "",
+            Some(extra_headers),
+        );
+
+        let mut quotas = Vec::new();
+
+        match result {
+            Some(response) => {
+                if let Some(body) = response.body {
+                    if let Ok(usage_resp) = serde_json::from_str::<CodexUsageResponse>(&body) {
+                        if let Some(rate_limit) = usage_resp.rate_limit {
+                            if let Some(primary) = rate_limit.primary_window {
+                                if let Some(used_percent) = primary.used_percent {
+                                    let remaining = (100.0 - used_percent) / 100.0;
+                                    quotas.push(ModelQuota {
+                                        model_id: "codex-5hr".to_string(),
+                                        display_name: "5 小时限额".to_string(),
+                                        remaining_fraction: remaining.clamp(0.0, 1.0),
+                                        auth_type: "codex".to_string(),
+                                    });
+                                    return quotas;
+                                }
+                            }
+                        }
                     }
                 }
-                _ => Vec::new(),
-            };
+                // Response received but parsing failed - mark as failed
+                quotas.push(ModelQuota {
+                    model_id: "codex-5hr".to_string(),
+                    display_name: "5 小时限额".to_string(),
+                    remaining_fraction: -1.0, // Use -1 to indicate failure
+                    auth_type: "codex".to_string(),
+                });
+            }
+            None => {
+                // Request failed - mark as failed
+                quotas.push(ModelQuota {
+                    model_id: "codex-5hr".to_string(),
+                    display_name: "5 小时限额".to_string(),
+                    remaining_fraction: -1.0, // Use -1 to indicate failure
+                    auth_type: "codex".to_string(),
+                });
+            }
+        }
 
-            all_quotas.extend(quotas);
+        quotas
+    }
+
+    fn fetch_all_quotas(&self, host: &str, key: &str, auth_type_filter: &str, codex_enabled: bool) -> Vec<ModelQuota> {
+        let auth_files = match self.get_auth_files(host, key) {
+            Some(files) => files,
+            None => return Vec::new(),
+        };
+
+        let auth_files: Vec<AuthFile> = auth_files
+            .into_iter()
+            .filter(|file| !file.disabled.unwrap_or(false))
+            .filter(|file| auth_type_filter == "all" || file.auth_type == auth_type_filter)
+            .filter(|file| codex_enabled || file.auth_type != "codex")
+            .collect();
+
+        if auth_files.is_empty() {
+            return Vec::new();
+        }
+
+        let worker_count = auth_files.len().min(CPA_QUOTA_REFRESH_WORKERS).max(1);
+        if worker_count == 1 {
+            let mut all_quotas = Vec::new();
+            for file in auth_files {
+                let quotas = match file.auth_type.as_str() {
+                    "antigravity" => self.get_antigravity_quota(host, key, &file.auth_index),
+                    "gemini-cli" => {
+                        if let Some(project) =
+                            self.extract_project_from_name(file.name.as_deref().unwrap_or(""))
+                        {
+                            self.get_gemini_cli_quota(host, key, &file.auth_index, &project)
+                        } else {
+                            Vec::new()
+                        }
+                    }
+                    "codex" if codex_enabled => {
+                        let account_id = self
+                            .download_auth_file(host, key, file.name.as_deref().unwrap_or(""))
+                            .and_then(|content| content.account_id.or(content.chatgpt_account_id));
+                        self.get_codex_quota(host, key, &file.auth_index, account_id.as_deref())
+                    }
+                    _ => Vec::new(),
+                };
+
+                all_quotas.extend(quotas);
+            }
+            return all_quotas;
+        }
+
+        let host = host.to_string();
+        let key = key.to_string();
+
+        let mut buckets: Vec<Vec<AuthFile>> = (0..worker_count).map(|_| Vec::new()).collect();
+        for (idx, file) in auth_files.into_iter().enumerate() {
+            buckets[idx % worker_count].push(file);
+        }
+
+        let mut handles = Vec::new();
+        for bucket in buckets {
+            let host = host.clone();
+            let key = key.clone();
+            let codex_enabled = codex_enabled;
+
+            handles.push(std::thread::spawn(move || {
+                let segment = CliProxyApiQuotaSegment::new();
+                let mut all_quotas = Vec::new();
+
+                for file in bucket {
+                    let quotas = match file.auth_type.as_str() {
+                        "antigravity" => segment.get_antigravity_quota(&host, &key, &file.auth_index),
+                        "gemini-cli" => {
+                            if let Some(project) =
+                                segment.extract_project_from_name(file.name.as_deref().unwrap_or(""))
+                            {
+                                segment.get_gemini_cli_quota(&host, &key, &file.auth_index, &project)
+                            } else {
+                                Vec::new()
+                            }
+                        }
+                        "codex" if codex_enabled => {
+                            let account_id = segment
+                                .download_auth_file(&host, &key, file.name.as_deref().unwrap_or(""))
+                                .and_then(|content| {
+                                    content.account_id.or(content.chatgpt_account_id)
+                                });
+                            segment.get_codex_quota(&host, &key, &file.auth_index, account_id.as_deref())
+                        }
+                        _ => Vec::new(),
+                    };
+
+                    all_quotas.extend(quotas);
+                }
+
+                all_quotas
+            }));
+        }
+
+        let mut all_quotas = Vec::new();
+        for handle in handles {
+            if let Ok(mut quotas) = handle.join() {
+                all_quotas.append(&mut quotas);
+            }
         }
 
         all_quotas
@@ -567,28 +832,20 @@ impl Segment for CliProxyApiQuotaSegment {
     }
 }
 
+/// Max worker threads for refreshing CPA quotas.
+///
+/// The refresh logic makes multiple blocking HTTP requests (via `ureq`) and is
+/// performance-bound by network latency. Using a small, bounded amount of
+/// parallelism provides a large latency win (similar to the management web UI)
+/// while avoiding excessive concurrency.
+const CPA_QUOTA_REFRESH_WORKERS: usize = 8;
+
+/// Cooldown between spawn attempts (seconds)
+const REFRESH_COOLDOWN_SECS: u64 = 60;
+/// Lock file TTL - consider stale after this (seconds)
+const REFRESH_LOCK_TTL_SECS: u64 = 120;
+
 impl CliProxyApiQuotaSegment {
-    fn auto_refresh_enabled(options: &HashMap<String, serde_json::Value>) -> bool {
-        options
-            .get("auto_refresh")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true)
-    }
-
-    fn auto_refresh_cooldown(options: &HashMap<String, serde_json::Value>) -> u64 {
-        options
-            .get("auto_refresh_cooldown")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(60)
-    }
-
-    fn auto_refresh_lock_ttl(options: &HashMap<String, serde_json::Value>) -> u64 {
-        options
-            .get("auto_refresh_lock_ttl")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(600)
-    }
-
     fn refresh_lock_path() -> Option<std::path::PathBuf> {
         Self::get_cache_path().map(|p| p.with_file_name(".cli_proxy_api_quota_refresh.lock"))
     }
@@ -597,16 +854,7 @@ impl CliProxyApiQuotaSegment {
         Self::get_cache_path().map(|p| p.with_file_name(".cli_proxy_api_quota_refresh.stamp"))
     }
 
-    fn maybe_spawn_refresh(&self, options: &HashMap<String, serde_json::Value>) {
-        if !Self::auto_refresh_enabled(options) {
-            return;
-        }
-
-        let cooldown = Self::auto_refresh_cooldown(options);
-        let lock_ttl = Self::auto_refresh_lock_ttl(options);
-        let now = SystemTime::now();
-
-        // If a refresh is already in progress, don't spawn another.
+    fn is_refresh_locked(now: SystemTime) -> bool {
         if let Some(lock_path) = Self::refresh_lock_path() {
             if let Ok(meta) = std::fs::metadata(&lock_path) {
                 if let Ok(modified) = meta.modified() {
@@ -614,9 +862,9 @@ impl CliProxyApiQuotaSegment {
                         .duration_since(modified)
                         .unwrap_or(Duration::ZERO)
                         .as_secs()
-                        <= lock_ttl
+                        <= REFRESH_LOCK_TTL_SECS
                     {
-                        return;
+                        return true;
                     }
                 }
 
@@ -625,31 +873,44 @@ impl CliProxyApiQuotaSegment {
             }
         }
 
+        false
+    }
+
+    fn is_refresh_on_cooldown(now: SystemTime) -> bool {
         let Some(stamp_path) = Self::refresh_stamp_path() else {
-            return;
+            return false;
         };
 
-        // Throttle spawns to avoid process storms on repeated failures.
         if let Ok(meta) = std::fs::metadata(&stamp_path) {
             if let Ok(modified) = meta.modified() {
                 if now
                     .duration_since(modified)
                     .unwrap_or(Duration::ZERO)
                     .as_secs()
-                    <= cooldown
+                    <= REFRESH_COOLDOWN_SECS
                 {
-                    return;
+                    return true;
                 }
             }
         }
+
+        false
+    }
+
+    fn touch_refresh_stamp() {
+        let Some(stamp_path) = Self::refresh_stamp_path() else {
+            return;
+        };
 
         if let Some(parent) = stamp_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(&stamp_path, Utc::now().to_rfc3339());
+    }
 
+    fn spawn_refresh_process() -> bool {
         let Ok(exe) = std::env::current_exe() else {
-            return;
+            return false;
         };
 
         let mut cmd = Command::new(exe);
@@ -665,14 +926,20 @@ impl CliProxyApiQuotaSegment {
             cmd.creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW);
         }
 
-        let _ = cmd.spawn();
+        cmd.spawn().is_ok()
     }
 
-    fn acquire_refresh_lock(
-        &self,
-        options: &HashMap<String, serde_json::Value>,
-    ) -> Result<Option<RefreshLockGuard>, String> {
-        let lock_ttl = Self::auto_refresh_lock_ttl(options);
+    fn try_refresh_cache_async(&self) -> bool {
+        let now = SystemTime::now();
+        if Self::is_refresh_locked(now) || Self::is_refresh_on_cooldown(now) {
+            return false;
+        }
+
+        Self::touch_refresh_stamp();
+        Self::spawn_refresh_process()
+    }
+
+    fn acquire_refresh_lock(&self) -> Result<Option<RefreshLockGuard>, String> {
         let now = SystemTime::now();
 
         let lock_path = Self::refresh_lock_path().ok_or("无法定位锁文件路径")?;
@@ -683,7 +950,7 @@ impl CliProxyApiQuotaSegment {
                     .duration_since(modified)
                     .unwrap_or(Duration::ZERO)
                     .as_secs()
-                    <= lock_ttl
+                    <= REFRESH_LOCK_TTL_SECS
                 {
                     // Another refresh is in progress.
                     return Ok(None);
@@ -719,7 +986,7 @@ impl CliProxyApiQuotaSegment {
         &self,
         options: &HashMap<String, serde_json::Value>,
     ) -> Result<usize, String> {
-        let lock_guard = match self.acquire_refresh_lock(options)? {
+        let lock_guard = match self.acquire_refresh_lock()? {
             Some(lock) => lock,
             None => return Ok(0),
         };
@@ -739,7 +1006,12 @@ impl CliProxyApiQuotaSegment {
             .and_then(|v| v.as_str())
             .unwrap_or("all");
 
-        let fetched = self.fetch_all_quotas(host, key, auth_type);
+        let codex_enabled = options
+            .get("codex_enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let fetched = self.fetch_all_quotas(host, key, auth_type, codex_enabled);
         if fetched.is_empty() {
             return Err("未获取到任何额度数据".to_string());
         }
@@ -780,8 +1052,11 @@ impl CliProxyApiQuotaSegment {
             None => (Vec::new(), false, false),
         };
         let need_refresh = !cache_present || !cache_valid;
+        let quotas = quotas;
+
+        // Always render immediately, refresh asynchronously if needed
         if need_refresh {
-            self.maybe_spawn_refresh(options);
+            self.try_refresh_cache_async();
         }
 
         // If no data available at all
