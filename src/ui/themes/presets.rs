@@ -41,23 +41,23 @@ impl ThemePresets {
                     "key".to_string(),
                     serde_json::Value::String("nbkey".to_string()),
                 );
-                 opts.insert(
-                     "cache_duration".to_string(),
-                     serde_json::Value::Number(180.into()),
-                 );
-                 opts.insert("auto_refresh".to_string(), serde_json::Value::Bool(true));
-                 opts.insert(
-                     "auto_refresh_cooldown".to_string(),
-                     serde_json::Value::Number(60.into()),
-                 );
-                 opts.insert(
-                     "auto_refresh_lock_ttl".to_string(),
-                     serde_json::Value::Number(600.into()),
-                 );
-                 opts.insert(
-                     "auth_type".to_string(),
-                     serde_json::Value::String("all".to_string()),
-                 );
+                opts.insert(
+                    "cache_duration".to_string(),
+                    serde_json::Value::Number(180.into()),
+                );
+                opts.insert("auto_refresh".to_string(), serde_json::Value::Bool(true));
+                opts.insert(
+                    "auto_refresh_cooldown".to_string(),
+                    serde_json::Value::Number(60.into()),
+                );
+                opts.insert(
+                    "auto_refresh_lock_ttl".to_string(),
+                    serde_json::Value::Number(600.into()),
+                );
+                opts.insert(
+                    "auth_type".to_string(),
+                    serde_json::Value::String("all".to_string()),
+                );
                 opts.insert(
                     "separator".to_string(),
                     serde_json::Value::String(" | ".to_string()),

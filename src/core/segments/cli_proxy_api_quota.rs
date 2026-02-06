@@ -128,7 +128,6 @@ impl TrackedModel {
         }
     }
 
-
     pub fn default_alias(&self) -> &'static str {
         match self {
             Self::Opus => "opus",
@@ -157,7 +156,12 @@ impl TrackedModel {
     }
 
     pub fn all() -> &'static [TrackedModel] {
-        &[Self::Opus, Self::Gemini3Pro, Self::Gemini3Flash, Self::Codex5hr]
+        &[
+            Self::Opus,
+            Self::Gemini3Pro,
+            Self::Gemini3Flash,
+            Self::Codex5hr,
+        ]
     }
 }
 
@@ -283,11 +287,7 @@ impl CliProxyApiQuotaSegment {
         format!("{}{}\x1b[39m", prefix, text)
     }
 
-
-    fn parse_model_order(
-        &self,
-        options: &HashMap<String, serde_json::Value>,
-    ) -> Vec<TrackedModel> {
+    fn parse_model_order(&self, options: &HashMap<String, serde_json::Value>) -> Vec<TrackedModel> {
         let raw = options
             .get("model_order")
             .and_then(|v| v.as_str())
@@ -410,8 +410,7 @@ impl CliProxyApiQuotaSegment {
         let cache_path = Self::get_cache_path().ok_or("无法定位用户目录，无法写入缓存")?;
 
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("创建缓存目录失败: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("创建缓存目录失败: {}", e))?;
         }
 
         let json =
@@ -621,10 +620,21 @@ impl CliProxyApiQuotaSegment {
             other => other,
         };
 
-        format!("codex_cli_rs/{} ({} {}; {}) WindowsTerminal", version, os, std::env::consts::OS, arch)
+        format!(
+            "codex_cli_rs/{} ({} {}; {}) WindowsTerminal",
+            version,
+            os,
+            std::env::consts::OS,
+            arch
+        )
     }
 
-    fn download_auth_file(&self, host: &str, key: &str, name: &str) -> Option<CodexAuthFileContent> {
+    fn download_auth_file(
+        &self,
+        host: &str,
+        key: &str,
+        name: &str,
+    ) -> Option<CodexAuthFileContent> {
         let url = format!("{}/v0/management/auth-files/download?name={}", host, name);
 
         let agent = ureq::AgentBuilder::new().build();
@@ -711,7 +721,13 @@ impl CliProxyApiQuotaSegment {
         quotas
     }
 
-    fn fetch_all_quotas(&self, host: &str, key: &str, auth_type_filter: &str, codex_enabled: bool) -> Vec<ModelQuota> {
+    fn fetch_all_quotas(
+        &self,
+        host: &str,
+        key: &str,
+        auth_type_filter: &str,
+        codex_enabled: bool,
+    ) -> Vec<ModelQuota> {
         let auth_files = match self.get_auth_files(host, key) {
             Some(files) => files,
             None => return Vec::new(),
@@ -777,12 +793,19 @@ impl CliProxyApiQuotaSegment {
 
                 for file in bucket {
                     let quotas = match file.auth_type.as_str() {
-                        "antigravity" => segment.get_antigravity_quota(&host, &key, &file.auth_index),
+                        "antigravity" => {
+                            segment.get_antigravity_quota(&host, &key, &file.auth_index)
+                        }
                         "gemini-cli" => {
-                            if let Some(project) =
-                                segment.extract_project_from_name(file.name.as_deref().unwrap_or(""))
+                            if let Some(project) = segment
+                                .extract_project_from_name(file.name.as_deref().unwrap_or(""))
                             {
-                                segment.get_gemini_cli_quota(&host, &key, &file.auth_index, &project)
+                                segment.get_gemini_cli_quota(
+                                    &host,
+                                    &key,
+                                    &file.auth_index,
+                                    &project,
+                                )
                             } else {
                                 Vec::new()
                             }
@@ -793,7 +816,12 @@ impl CliProxyApiQuotaSegment {
                                 .and_then(|content| {
                                     content.account_id.or(content.chatgpt_account_id)
                                 });
-                            segment.get_codex_quota(&host, &key, &file.auth_index, account_id.as_deref())
+                            segment.get_codex_quota(
+                                &host,
+                                &key,
+                                &file.auth_index,
+                                account_id.as_deref(),
+                            )
                         }
                         _ => Vec::new(),
                     };

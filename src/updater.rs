@@ -129,9 +129,10 @@ impl UpdateState {
 
             // Clear stale "Ready" notification when the installed version already matches/exceeds it.
             if let UpdateStatus::Ready { version, .. } = &state.status {
-                if let Ok(false) =
-                    crate::updater::github::is_newer_release_version(version, &state.current_version)
-                {
+                if let Ok(false) = crate::updater::github::is_newer_release_version(
+                    version,
+                    &state.current_version,
+                ) {
                     state.status = UpdateStatus::Idle;
                 }
             }
