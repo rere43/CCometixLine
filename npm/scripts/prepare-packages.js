@@ -31,9 +31,11 @@ console.log(`🚀 Preparing packages for version ${version}`);
 // Define platform structures
 const platforms = [
   'darwin-x64',
-  'darwin-arm64', 
+  'darwin-arm64',
   'linux-x64',
   'linux-x64-musl',
+  'linux-arm64',
+  'linux-arm64-musl',
   'win32-x64'
 ];
 
