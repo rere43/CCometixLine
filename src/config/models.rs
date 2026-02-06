@@ -17,7 +17,7 @@ pub struct ModelAlias {
     pub context_limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ModelConfig {
     /// Model aliases for exact ID matching (highest priority)
     #[serde(default, rename = "aliases")]
@@ -175,15 +175,6 @@ impl ModelConfig {
 
         fs::write(path, template_content)?;
         Ok(())
-    }
-}
-
-impl Default for ModelConfig {
-    fn default() -> Self {
-        Self {
-            model_aliases: vec![],
-            model_entries: vec![],
-        }
     }
 }
 

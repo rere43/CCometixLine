@@ -63,7 +63,7 @@ impl UpdateState {
         let age_secs = now.signed_duration_since(last_check).num_seconds();
 
         // If clock moved backwards, consider the lock invalid to avoid permanently skipping checks.
-        age_secs < 0 || age_secs > UPDATE_PID_LOCK_TTL_SECS
+        !(0..=UPDATE_PID_LOCK_TTL_SECS).contains(&age_secs)
     }
 
     /// Get status bar display text
@@ -225,7 +225,7 @@ impl UpdateState {
             use std::process::Command;
             if let Ok(output) = Command::new("tasklist")
                 .arg("/FI")
-                .arg(&format!("PID eq {}", pid))
+                .arg(format!("PID eq {}", pid))
                 .output()
             {
                 String::from_utf8_lossy(&output.stdout).contains(&pid.to_string())
@@ -272,7 +272,7 @@ impl UpdateState {
         if let Some(last_check) = self.last_check {
             let now = Utc::now();
             let hours_passed = now.signed_duration_since(last_check).num_hours();
-            hours_passed < 0 || hours_passed >= UPDATE_CHECK_INTERVAL_HOURS
+            !(0..UPDATE_CHECK_INTERVAL_HOURS).contains(&hours_passed)
         } else {
             true
         }

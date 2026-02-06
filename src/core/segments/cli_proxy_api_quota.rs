@@ -35,6 +35,14 @@ struct ApiCallResponse {
     error: Option<String>,
 }
 
+struct ApiCallRequest<'a> {
+    auth_index: &'a str,
+    method: &'a str,
+    url: &'a str,
+    data: &'a str,
+    extra_headers: Option<HashMap<String, String>>,
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 struct QuotaInfo {
@@ -454,13 +462,16 @@ impl CliProxyApiQuotaSegment {
         &self,
         host: &str,
         key: &str,
-        auth_index: &str,
-        method: &str,
-        url: &str,
-        data: &str,
-        extra_headers: Option<HashMap<String, String>>,
+        request: ApiCallRequest<'_>,
     ) -> Option<ApiCallResponse> {
         let api_url = format!("{}/v0/management/api-call", host);
+        let ApiCallRequest {
+            auth_index,
+            method,
+            url,
+            data,
+            extra_headers,
+        } = request;
 
         let mut headers: HashMap<String, String> = HashMap::new();
         headers.insert("Authorization".to_string(), "Bearer $TOKEN$".to_string());
@@ -500,11 +511,13 @@ impl CliProxyApiQuotaSegment {
         let result = self.api_call(
             host,
             key,
-            auth_index,
-            "POST",
-            "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
-            "{}",
-            Some(extra_headers),
+            ApiCallRequest {
+                auth_index,
+                method: "POST",
+                url: "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels",
+                data: "{}",
+                extra_headers: Some(extra_headers),
+            },
         );
 
         let mut quotas = Vec::new();
@@ -569,11 +582,13 @@ impl CliProxyApiQuotaSegment {
         let result = self.api_call(
             host,
             key,
-            auth_index,
-            "POST",
-            "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-            &data,
-            None,
+            ApiCallRequest {
+                auth_index,
+                method: "POST",
+                url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+                data: &data,
+                extra_headers: None,
+            },
         );
 
         let mut quotas = Vec::new();
@@ -670,11 +685,13 @@ impl CliProxyApiQuotaSegment {
         let result = self.api_call(
             host,
             key,
-            auth_index,
-            "GET",
-            "https://chatgpt.com/backend-api/wham/usage",
-            "",
-            Some(extra_headers),
+            ApiCallRequest {
+                auth_index,
+                method: "GET",
+                url: "https://chatgpt.com/backend-api/wham/usage",
+                data: "",
+                extra_headers: Some(extra_headers),
+            },
         );
 
         let mut quotas = Vec::new();
@@ -744,7 +761,7 @@ impl CliProxyApiQuotaSegment {
             return Vec::new();
         }
 
-        let worker_count = auth_files.len().min(CPA_QUOTA_REFRESH_WORKERS).max(1);
+        let worker_count = auth_files.len().clamp(1, CPA_QUOTA_REFRESH_WORKERS);
         if worker_count == 1 {
             let mut all_quotas = Vec::new();
             for file in auth_files {
@@ -785,7 +802,6 @@ impl CliProxyApiQuotaSegment {
         for bucket in buckets {
             let host = host.clone();
             let key = key.clone();
-            let codex_enabled = codex_enabled;
 
             handles.push(std::thread::spawn(move || {
                 let segment = CliProxyApiQuotaSegment::new();
@@ -1080,7 +1096,6 @@ impl CliProxyApiQuotaSegment {
             None => (Vec::new(), false, false),
         };
         let need_refresh = !cache_present || !cache_valid;
-        let quotas = quotas;
 
         // Always render immediately, refresh asynchronously if needed
         if need_refresh {

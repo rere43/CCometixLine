@@ -37,6 +37,12 @@ pub struct AliasEditorApp {
     temp_alias: Option<ModelAlias>,
 }
 
+impl Default for AliasEditorApp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AliasEditorApp {
     pub fn new() -> Self {
         let config = ModelConfig::load();

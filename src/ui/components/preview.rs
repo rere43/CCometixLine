@@ -233,7 +233,7 @@ impl PreviewComponent {
                             ),
                         );
 
-                        vec![opus, g3p, g3f].join(separator)
+                        [opus, g3p, g3f].join(separator)
                     },
                     secondary: "".to_string(),
                     metadata: {

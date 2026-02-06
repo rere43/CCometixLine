@@ -833,18 +833,19 @@ impl App {
             }
             Some(TextInputTarget::CliProxyApiQuotaModelOrder) => {
                 // Validate: only allow digits 0-3, no duplicates
-                let valid = value.chars().all(|c| c >= '0' && c <= '3') && value.len() <= 4 && {
-                    let mut seen = [false; 4];
-                    value.chars().all(|c| {
-                        let idx = (c as usize) - ('0' as usize);
-                        if seen[idx] {
-                            false
-                        } else {
-                            seen[idx] = true;
-                            true
-                        }
-                    })
-                };
+                let valid =
+                    value.chars().all(|c| ('0'..='3').contains(&c)) && value.len() <= 4 && {
+                        let mut seen = [false; 4];
+                        value.chars().all(|c| {
+                            let idx = (c as usize) - ('0' as usize);
+                            if seen[idx] {
+                                false
+                            } else {
+                                seen[idx] = true;
+                                true
+                            }
+                        })
+                    };
 
                 if valid {
                     if let Some(segment) = self.config.segments.get_mut(self.selected_segment) {
